@@ -4,142 +4,113 @@ This document provides guidelines for AI agents working on this repository.
 
 ## Project Overview
 
-This repository provides Debian development environment configurations for Docker containers and Incus VMs.
+This repository provides Kubernetes-based development environments using a Helm chart and a Bash spawn script. Tests run on a local kind cluster.
 
 ## Technology Stack
 
-- **Infrastructure**: Incus/LXD for VMs, Docker/Podman for containers
-- **Task Runner**: Just (preferred over Makefile)
-- **Base Image**: Debian 13 (Trixie)
+- **Orchestration**: Kubernetes / kind
+- **Packaging**: Helm
+- **Provisioning**: Bash
+- **Task Runner**: Just
+- **Base Image**: fedora:42
 
 ## Conventions
 
 ### Commit Messages
 - Use conventional commits (feat, fix, refactor, chore, etc.)
-- Include emoji prefixes where appropriate
-- Keep subject line under 72 characters
+- Keep subject line under 72 characters.
+- Do not use emoji prefixes.
 
 ### File Structure
-- Templates live in `templates/debian/`
-- Each template includes:
-  - `README.md` - Usage instructions
-  - `Dockerfile` - Container provisioning
-  - `cloud-init.yaml` - VM provisioning
-  - `justfile` - Build/management commands
-
-### Documentation
+- Chart lives in `charts/dev-env/`
+- Scripts live in `scripts/`
 - Root-level docs for user-facing information (README.md, AGENTS.md)
 - Keep documentation concise and actionable
 
 ## Guidelines for AI Agents
 
-### When Modifying Templates
-1. Test changes in isolated environment first
-2. Document all commands and their purpose
-3. Ensure Docker and VM configurations stay in sync
+### Chart Changes
+- Run `helm lint` on every chart change.
+- Run `helm template` to inspect rendered manifests.
+- Verify the chart works on a kind cluster.
+- Resource names must equal the release name.
 
-### When Working with Dockerfile
-- Use multi-stage builds when appropriate
-- Keep images lean by cleaning up apt caches
-- Use non-root user for security
-
-### When Working with Cloud-Init
-- Use `#cloud-config` header
-- Keep packages section organized with comments
-- Test runcmd sequences carefully
-- Handle failures gracefully with `|| echo "..."` patterns
-
-### When Writing Scripts
+### Script Changes
 - Use bash shebang: `#!/usr/bin/env bash`
-- Include error handling where appropriate
-- Comment non-obvious logic
-- Make scripts idempotent when possible
+- Include error handling (`set -euo pipefail`) where appropriate.
+- Comment non-obvious logic.
+
+### Provisioning Script
+- The provisioning script (`charts/dev-env/static/up.sh`) runs at container start.
+- It must stay idempotent: re-runnable without errors.
+- Do not use `chsh` on `fedora:42` (it is not available).
+
+### Secret Volumes
+- Secret volume mounts are read-only inside the container.
 
 ## Testing
 
-### Docker Template
-```bash
-cd templates/debian
-just build
-just run
-```
-
-### VM Template
-```bash
-cd templates/debian
-just create
-just test-profile
-```
-
-## Common Tasks
-
-### Create New Development Environment
-```bash
-# Docker
-docker run -it --rm debian-dev
-
-# VM
-incus launch --vm images:debian/13/cloud <vm-name> -p default -p debian-dev
-```
-
-**Note**: The Debian Docker image uses an entrypoint script that keeps the container running. When testing commands:
+### Smoke Test
 
 ```bash
-# Override entrypoint for one-off commands
-docker run --rm --entrypoint bash debian-dev -c "your-command-here"
-
-# Or run interactively (container stays running)
-docker run -it --rm --entrypoint bash debian-dev
+just test
 ```
 
-### Manage Profiles
-```bash
-# List all profiles
-incus profile list
-
-# Delete old profile
-incus profile delete <profile-name>
-```
+This recipe recreates the kind cluster, creates an environment non-interactively, runs an SSH smoke check, then destroys the environment. Prerequisites are listed in README.md.
 
 ## Troubleshooting
 
-### VM Agent Not Running
-- Wait 5-10 minutes after launch
-- Check: `incus exec <vm-name> -- cloud-init status`
-- Restart: `incus restart <vm-name> --force`
+### Pod Not Ready
+The image pull and dnf install take time. Check status with:
 
-### Package Installation Failures
-- Check network connectivity
-- Verify package names for Debian
-- Use official installation scripts as fallback
-
-### Docker Build Fails on sudo Package
-- **Problem**: Installing `sudo` triggers interactive dpkg conffile prompt
-- **Cause**: Modifying `/etc/sudoers` before sudo is installed causes dpkg to prompt for conffile conflict resolution
-- **Solution**:
-  1. Use `DEBIAN_FRONTEND=noninteractive` with apt-get to suppress prompts
-  2. Configure sudoers **after** sudo package installation
-  3. Use `/etc/sudoers.d/` directory instead of appending to main sudoers file
-
-```dockerfile
-# Install packages with noninteractive frontend
-RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y sudo ...
-
-# Configure sudo AFTER installation
-RUN echo 'devuser ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/devuser && \
-    chmod 0440 /etc/sudoers.d/devuser && \
-    usermod -aG sudo devuser
+```bash
+kubectl --context <ctx> get pods -n <namespace>
+kubectl --context <ctx> logs -l app.kubernetes.io/instance=<release> -n <namespace>
 ```
+
+### SSH Debugging
+
+```bash
+ssh -v k8s-dev-<name>
+```
+
+The port-forward log is at `~/.local/state/dev-env/<name>/forward.log`.
+
+### Terminating Namespace After Destroy
+
+The namespace may linger in Terminating state. Force cleanup if needed:
+
+```bash
+kubectl delete namespace dev-<name> --force --grace-period=0
+```
+
+### Host-Key Warnings
+
+Host-key warnings on the local forward are expected in v1 because pod keys regenerate on every start. The `StrictHostKeyChecking no` setting handles this.
 
 ## Security
 
-- Never commit SSH private keys
-- Use cloud-init for SSH key configuration
-- Run containers as non-root when possible
-- Keep base images updated
+- Never commit SSH private keys or kubeconfigs.
+- Host-key checking is disabled on the local forward deliberately. The Kubernetes API channel is the trust boundary.
+- Keep the fedora image updated for security patches.
 
 ## Resources
 
-- [Incus Documentation](https://linuxcontainers.org/incus/docs/main/)
-- [Cloud-init Documentation](https://cloudinit.readthedocs.io/)
+- [Kubernetes Documentation](https://kubernetes.io/docs/)
+- [kind Documentation](https://kind.sigs.k8s.io/)
+- [Helm Documentation](https://helm.sh/docs/)
 - [Just Command Runner](https://github.com/casey/just)
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as GitHub issues in this repo. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Triage uses the five canonical labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `GLOSSARY.md` at the repo root, ADRs in `docs/adr/`. See `docs/agents/domain.md`.

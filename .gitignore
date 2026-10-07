@@ -29,3 +29,6 @@ temp/
 incus-test-*
 
 # Docker images (referenced only, not stored)
+
+# Scratch / research notes (local only)
+.scratch/

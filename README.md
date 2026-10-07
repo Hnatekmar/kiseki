@@ -1,95 +1,83 @@
 # Dev Environments
 
-Debian development environment configurations for rapid provisioning of isolated Docker containers and Incus VMs.
+Kubernetes dev environments. Each environment is one Fedora 42 pod, reached over `kubectl port-forward` and an SSH alias. Managed with a Helm chart and a Bash spawn script.
 
-## Overview
+## Prerequisites
 
-This repository provides pre-configured templates for setting up comprehensive Debian development environments in two modalities:
+kind, kubectl, helm, just, socat, and an ssh client. The smoke test uses the public key at `~/.ssh/id_ed25519.pub`; for your own environments the script auto-detects keys under `~/.ssh` or takes `--ssh-key`.
 
-- **Docker Container** - Lightweight, portable container environment
-- **Incus VM** - Full virtualized environment with cloud-init provisioning
+## Quick Start
 
-## Templates
-
-### Debian Template (`templates/debian/`)
-
-Supports both Docker and Incus VM deployment.
-
-**Best for:**
-- Full development environment with all tools pre-installed
-- Kernel-level testing (VM mode)
-- Complete system isolation
-- Consistent development environments across teams
-
-**Quick Start:**
+Run the full smoke test. It recreates the kind cluster `dev-envs-test-cluster` (deletes it first), spawns an environment, checks SSH, then tears everything down. Recreating the cluster removes any other environments on it:
 
 ```bash
-# Docker Container
-just docker-build
-just docker-run
-
-# Incus VM
-just debian-create
-incus launch --vm images:debian/13/cloud my-dev-environment -p default -p debian-dev
+just test
 ```
 
-See [templates/debian/README.md](templates/debian/README.md) for full documentation.
+Create an environment (CPU and memory prompt on a TTY; flags override; omit `--context` to use the current kubectl context):
 
-## Requirements
-
-### For Docker
-- Docker or Podman installed
-- At least 2GB RAM and 10GB disk space
-
-### For Incus VM
-- [Incus/LXD](https://linuxcontainers.org/incus/) installed and configured
-- KVM support for VMs
-- At least 4GB RAM and 20GB disk space per VM
-
-## Common Tasks
-
-### Using Just (Recommended)
-
-Install [just](https://github.com/casey/just):
 ```bash
-# Ubuntu/Debian
-sudo apt install just
-
-# macOS
-brew install just
-
-# Arch
-sudo pacman -S just
+scripts/dev-env.sh create my-env --cpu 4 --memory 8Gi --ssh-key ~/.ssh/id_ed25519.pub
 ```
 
-Available commands:
+Connect, list, and destroy:
+
 ```bash
-just --list
+ssh k8s-dev-my-env
+scripts/dev-env.sh list
+scripts/dev-env.sh destroy my-env
+scripts/dev-env.sh destroy my-env -f   # no confirmation
 ```
+
+## What You Get
+
+A single `fedora:42` pod with one container running `openssh-server` and `zsh`. You log in as `root` inside the pod. Storage is ephemeral (no PVC). No GPU. Startup installs packages via dnf and starts sshd.
+
+## How SSH Works
+
+The script writes one block per environment into `~/.ssh/config.d/k8s-dev-envs` and adds an `Include` directive to `~/.ssh/config` on first use. Every alias uses `ProxyCommand` to run `scripts/dev-env.sh proxy <alias>`, which starts a `kubectl port-forward` (port 2200-2299) and bridges it with `socat`. Host-key checking is disabled (`StrictHostKeyChecking no`, `UserKnownHostsFile /dev/null`) because pod keys regenerate on every start. The Kubernetes API channel is the trust boundary.
+
+VS Code Remote-SSH and JetBrains Gateway work with the alias `k8s-dev-<name>`.
+
+## Justfile
+
+One recipe only:
+
+```
+just test    # kind cluster -> create env -> ssh check -> destroy
+```
+
+## Chart Values
+
+| Key                                    | Default   |
+|----------------------------------------|-----------|
+| `image.repository` / `image.tag`       | `fedora:42` |
+| `resources.requests.{cpu,memory}`      | `1` / `1Gi` |
+| `resources.limits.{cpu,memory}`        | `4` / `8Gi` |
+| `ssh.authorizedKey`                    | `""` (use `--set-file`) |
 
 ## Project Structure
 
 ```
 .
-├── README.md              # This file
-├── AGENTS.md              # AI agent guidelines
-├── Justfile               # Task runner recipes
-├── .gitignore             # Git ignore patterns
-├── .github/
-│   └── ISSUE_TEMPLATE/    # Issue templates
-└── templates/
-    └── debian/            # Debian template (Docker + Incus VM)
-        ├── README.md      # Template documentation
-        ├── Dockerfile     # Docker image definition
-        ├── entrypoint.sh  # Container entrypoint script
-        ├── cloud-init.yaml # VM provisioning configuration
-        └── justfile       # Template-local commands
+├── charts/dev-env/             # Helm chart
+├── scripts/
+│   ├── dev-env.sh              # Spawn/destroy/list script
+│   └── create-cluster.sh       # Create kind cluster for tests
+├── docs/
+├── Justfile
+├── GLOSSARY.md
+├── README.md
+└── AGENTS.md
 ```
+
+## Limitations
+
+- v1 targets kind only.
+- Ephemeral storage: all data is lost on pod restart.
+- No GPU support.
+- SSH access only via port-forward.
 
 ## Contributing
 
-See [AGENTS.md](AGENTS.md) for guidelines on working with this repository.
-
-## License
-
-This repository is provided as-is for development purposes.
+See [AGENTS.md](AGENTS.md).
