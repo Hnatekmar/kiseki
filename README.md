@@ -4,17 +4,17 @@ Kubernetes dev environments. Each environment is one Fedora 42 pod, reached over
 
 ## Prerequisites
 
-kind, kubectl, helm, just, socat, and an ssh client. The smoke test uses the public key at `~/.ssh/id_ed25519.pub`; for your own environments the script auto-detects keys under `~/.ssh` or takes `--ssh-key`.
+kind, kubectl, helm, just, socat, and an ssh client. The smoke test uses the public key at `~/.ssh/id_ed25519.pub`. For your own environments the script auto-detects keys under `~/.ssh` or takes `--ssh-key`.
 
 ## Quick Start
 
-Run the full smoke test. It recreates the kind cluster `dev-envs-test-cluster` (deletes it first), spawns an environment, checks SSH, then tears everything down. Recreating the cluster removes any other environments on it:
+Run the full smoke test. It recreates the kind cluster `dev-envs-test-cluster` (deletes it first), spawns an environment, checks SSH, then tears everything down. Recreating the cluster deletes any other environments on it:
 
 ```bash
 just test
 ```
 
-Create an environment (CPU and memory prompt on a TTY; flags override; omit `--context` to use the current kubectl context):
+Create an environment. CPU and memory prompt on a TTY. Flags override. Omit `--context` to use the current kubectl context.
 
 ```bash
 scripts/dev-env.sh create my-env --cpu 4 --memory 8Gi --ssh-key ~/.ssh/id_ed25519.pub
@@ -35,7 +35,7 @@ A single `fedora:42` pod with one container running `openssh-server` and `zsh`. 
 
 ## How SSH Works
 
-The script writes one block per environment into `~/.ssh/config.d/k8s-dev-envs` and adds an `Include` directive to `~/.ssh/config` on first use. Every alias uses `ProxyCommand` to run `scripts/dev-env.sh proxy <alias>`, which starts a `kubectl port-forward` (port 2200-2299) and bridges it with `socat`. Host-key checking is disabled (`StrictHostKeyChecking no`, `UserKnownHostsFile /dev/null`) because pod keys regenerate on every start. The Kubernetes API channel is the trust boundary.
+The script writes one block per environment into `~/.ssh/config.d/k8s-dev-envs` and adds an `Include` directive to `~/.ssh/config` on first use. Every alias uses `ProxyCommand` to run `scripts/dev-env.sh proxy <alias>`, which starts a `kubectl port-forward` (port 2200-2299) and bridges it with `socat`. The script disables host-key checking. It uses `StrictHostKeyChecking no` and `UserKnownHostsFile /dev/null`. Pod keys regenerate on every start. The Kubernetes API channel is the trust boundary.
 
 VS Code Remote-SSH and JetBrains Gateway work with the alias `k8s-dev-<name>`.
 

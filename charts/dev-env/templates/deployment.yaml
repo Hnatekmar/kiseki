@@ -40,6 +40,10 @@ spec:
             - name: ssh-key
               mountPath: /etc/dev-ssh
               readOnly: true
+{{ if .Values.storage.enabled }}
+            - name: data
+              mountPath: /data
+{{ end }}
       volumes:
         - name: provision
           configMap:
@@ -48,3 +52,8 @@ spec:
           secret:
             secretName: {{ include "dev-env.fullname" . }}-ssh-key
             defaultMode: 0600
+{{ if .Values.storage.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "dev-env.fullname" . }}
+{{ end }}

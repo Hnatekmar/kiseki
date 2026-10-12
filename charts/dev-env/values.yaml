@@ -15,3 +15,9 @@ ssh:
   authorizedKey: ""
 
 fullnameOverride: ""
+
+storage:
+  enabled: false
+  size: 1Gi
+  storageClass: truenas-nvmeof
+
