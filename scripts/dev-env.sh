@@ -26,6 +26,7 @@ Commands:
 Create options:
   --cpu N             CPU cores (default: prompt then 4)
   --memory SIZE       Memory (default: prompt then 8Gi)
+  --gpu N             Request N NVIDIA GPUs (default: 0)
   --ssh-key PATH      SSH public key path
   --context CTX       Kubernetes context
   --persistence       Enable persistent volume (default 1Gi)

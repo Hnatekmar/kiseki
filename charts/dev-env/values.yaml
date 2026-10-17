@@ -11,6 +11,11 @@ resources:
     cpu: "4"
     memory: 8Gi
 
+gpu:
+  enabled: false
+  count: 1
+  runtimeClassName: nvidia
+
 ssh:
   authorizedKey: ""
 

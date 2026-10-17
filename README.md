@@ -4,7 +4,7 @@ Kubernetes dev environments. Each environment is one Fedora 42 pod, reached over
 
 ## Prerequisites
 
-kind, kubectl, helm, just, socat, and an ssh client. The smoke test uses the public key at `~/.ssh/id_ed25519.pub`. For your own environments the script auto-detects keys under `~/.ssh` or takes `--ssh-key`.
+kind, kubectl, helm, just, socat, and an ssh client. The smoke test uses the public key at `~/.ssh/id_ed25519.pub`. For your own environments the script auto-detects keys under `~/.ssh` or takes `--ssh-key`. The GPU test also needs `nvkind`, an NVIDIA driver, and the NVIDIA container toolkit.
 
 ## Quick Start
 
@@ -31,7 +31,19 @@ scripts/dev-env.sh destroy my-env -f   # no confirmation
 
 ## What You Get
 
-A single `fedora:42` pod with one container running `openssh-server` and `zsh`. You log in as `root` inside the pod. Storage is ephemeral (no PVC). No GPU. Startup installs packages via dnf and starts sshd.
+A single `fedora:42` pod with one container running `openssh-server` and `zsh`. You log in as `root` inside the pod. Storage is ephemeral (no PVC). No GPU by default. Startup installs packages via dnf and starts sshd.
+
+## GPU
+
+Request GPUs with `--gpu`:
+
+```bash
+scripts/dev-env.sh create gpu-env --gpu 1
+```
+
+The cluster must have an `nvidia` RuntimeClass and the NVIDIA device plugin. The GPU Operator provides both. For a local kind test, use `just test-gpu`. It uses `nvkind` and installs the device plugin.
+
+Use a recent `nvkind` build. `go install github.com/NVIDIA/nvkind/cmd/nvkind@main` works with containerd 2.x. Follow the nvkind setup steps for the NVIDIA container toolkit.
 
 ## How SSH Works
 
@@ -41,10 +53,10 @@ VS Code Remote-SSH and JetBrains Gateway work with the alias `k8s-dev-<name>`.
 
 ## Justfile
 
-One recipe only:
-
 ```
-just test    # kind cluster -> create env -> ssh check -> destroy
+just lint      # render checks for CPU, GPU, and empty resources
+just test      # kind cluster -> create env -> ssh check -> destroy
+just test-gpu  # nvkind cluster -> GPU env -> nvidia-smi check -> destroy
 ```
 
 ## Chart Values
@@ -54,7 +66,12 @@ just test    # kind cluster -> create env -> ssh check -> destroy
 | `image.repository` / `image.tag`       | `fedora:42` |
 | `resources.requests.{cpu,memory}`      | `1` / `1Gi` |
 | `resources.limits.{cpu,memory}`        | `4` / `8Gi` |
+| `gpu.enabled`                          | `false` |
+| `gpu.count`                            | `1` |
+| `gpu.runtimeClassName`                 | `nvidia` |
 | `ssh.authorizedKey`                    | `""` (use `--set-file`) |
+
+`gpu.runtimeClassName` must name an existing RuntimeClass on the cluster.
 
 ## Project Structure
 
@@ -63,7 +80,8 @@ just test    # kind cluster -> create env -> ssh check -> destroy
 ├── charts/dev-env/             # Helm chart
 ├── scripts/
 │   ├── dev-env.sh              # Spawn/destroy/list script
-│   └── create-cluster.sh       # Create kind cluster for tests
+│   ├── create-cluster.sh       # Create kind cluster for tests
+│   └── test-gpu.sh             # GPU smoke test
 ├── docs/
 ├── Justfile
 ├── GLOSSARY.md
@@ -75,7 +93,7 @@ just test    # kind cluster -> create env -> ssh check -> destroy
 
 - v1 targets kind only.
 - Ephemeral storage: all data is lost on pod restart.
-- No GPU support.
+- GPU support requires an `nvidia` RuntimeClass and the NVIDIA device plugin. The GPU Operator provides both. `nvkind` provides the RuntimeClass for local kind tests.
 - SSH access only via port-forward.
 
 ## Contributing

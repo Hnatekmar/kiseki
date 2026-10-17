@@ -58,6 +58,14 @@ just test
 
 This recipe recreates the kind cluster, creates an environment non-interactively, runs an SSH smoke check, then destroys the environment. Prerequisites are listed in README.md.
 
+### GPU Smoke Test
+
+```bash
+just test-gpu
+```
+
+This recipe uses `nvkind` to create a GPU-enabled kind cluster, installs the NVIDIA device plugin, creates an environment with one GPU, runs `nvidia-smi` over SSH, then destroys the environment. It needs an NVIDIA driver, the NVIDIA container toolkit, and `nvkind`.
+
 ## Troubleshooting
 
 ### Pod Not Ready

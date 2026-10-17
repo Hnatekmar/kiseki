@@ -9,6 +9,7 @@ cmd_create() {
   local name=""
   local cpu=""
   local memory=""
+  local gpu=0
   local key=""
   local no_check=0
   local persistence=0
@@ -22,6 +23,13 @@ cmd_create() {
       ;;
     --memory)
       memory="$2"
+      shift 2
+      ;;
+    --gpu)
+      [[ $# -ge 2 ]] || die "--gpu requires a count"
+      gpu="$2"
+      [[ "$gpu" =~ ^[0-9]{1,3}$ ]] || die "Invalid GPU count '$gpu'. Must be 0-999"
+      gpu="$((10#$gpu))"
       shift 2
       ;;
     --ssh-key)
@@ -149,12 +157,16 @@ cmd_create() {
   echo "Creating environment '$name':"
   echo "  CPU:    $cpu"
   echo "  Memory: $memory"
+  [[ "$gpu" -gt 0 ]] && echo "  GPU:    $gpu"
   echo "  Key:    $key"
   echo "  Context: $ctx"
 
   # helm install
   if [[ "$persistence" -eq 1 ]]; then
     extra+=(--set "storage.enabled=true")
+  fi
+  if [[ "$gpu" -gt 0 ]]; then
+    extra+=(--set "gpu.enabled=true" --set "gpu.count=$gpu")
   fi
   helm --kube-context "$ctx" install "$ns" "$CHART_DIR" \
     -n "$ns" --create-namespace \

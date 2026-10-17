@@ -6,6 +6,7 @@ metadata:
     {{- include "dev-env.labels" . | nindent 4 }}
 spec:
   replicas: 1
+  progressDeadlineSeconds: 1200
   strategy:
     type: Recreate
   selector:
@@ -16,6 +17,18 @@ spec:
       labels:
         {{- include "dev-env.selectorLabels" . | nindent 8 }}
     spec:
+{{- $gpu := .Values.gpu | default dict }}
+{{- if $gpu.enabled }}
+{{- $gpuCount := int $gpu.count }}
+{{- if or (lt $gpuCount 1) (ne (toString $gpuCount) (toString $gpu.count)) }}
+{{- fail "gpu.count must be a positive integer when gpu.enabled is true" }}
+{{- end }}
+      runtimeClassName: {{ $gpu.runtimeClassName | default "" }}
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+{{- end }}
       containers:
         - name: dev-env
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -25,8 +38,13 @@ spec:
             - name: ssh
               containerPort: 22
               protocol: TCP
+          {{- $resources := .Values.resources }}
+          {{- if $gpu.enabled }}
+          {{- $resources = deepCopy ($resources | default dict) }}
+          {{- $_ := set $resources "limits" (mergeOverwrite (dict "nvidia.com/gpu" (int $gpu.count)) ($resources.limits | default dict)) }}
+          {{- end }}
           resources:
-            {{- toYaml .Values.resources | nindent 12 }}
+            {{- toYaml $resources | nindent 12 }}
           readinessProbe:
             tcpSocket:
               port: 22
