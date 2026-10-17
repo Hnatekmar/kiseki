@@ -1,6 +1,6 @@
 # Dev Environments
 
-Kubernetes dev environments. Each environment is one Fedora 42 pod, reached over `kubectl port-forward` and an SSH alias. Managed with a Helm chart and a Bash spawn script.
+Kubernetes dev environments. Each environment is one Fedora 42 pod, reached over `kubectl port-forward` and an SSH alias. Managed with a Helm chart and a Bash spawn script. A pod can carry sidecar containers (redis, postgres, …), a docker daemon for image builds, and one Ingress for web work.
 
 ## Prerequisites
 
@@ -33,6 +33,57 @@ scripts/dev-env.sh destroy my-env -f   # no confirmation
 
 A single `fedora:42` pod with one container running `openssh-server` and `zsh`. You log in as `root` inside the pod. Storage is ephemeral (no PVC). No GPU by default. Startup installs packages via dnf and starts sshd.
 
+## Web access
+
+Publish one container port through an Ingress:
+
+```bash
+scripts/dev-env.sh create web --address web.dev-k8s.srv.hnatekmar.dev --port 3000
+```
+
+`--address` is the hostname, `--port` is the port the app listens on inside the
+container. The chart adds a Service port and an Ingress with a cert-manager
+certificate. The app must bind `0.0.0.0`, not `127.0.0.1`. The URL is printed at
+the end and kept for `list`.
+
+The cluster needs an ingress controller, the named ClusterIssuer
+(`ingress.clusterIssuer`, default `letsencrypt-cloudflare`), and a DNS record
+for the host. Without them the Ingress stays unserved and the environment still
+works over SSH.
+
+## Sidecars
+
+Run extra containers in the pod, sharing its network namespace:
+
+```bash
+scripts/dev-env.sh create api \
+  --container redis=redis:7-alpine,port=6379 \
+  --container pg=postgres:17,port=5432,env=POSTGRES_PASSWORD=dev
+```
+
+`--container` takes `name=IMAGE[:TAG][,port=N][,env=KEY=VALUE]`, repeatable. The
+dev container reaches each one on `127.0.0.1:<port>`. For anything richer
+(commands, volumes, resources), pass a values file with `extraContainers:` in
+the chart's format:
+
+```bash
+scripts/dev-env.sh create api -f sidecars.yaml
+```
+
+Sidecar state is ephemeral unless the environment has persistence.
+
+## Docker builds
+
+```bash
+scripts/dev-env.sh create build --docker
+```
+
+Adds a `docker:dind` sidecar and points `DOCKER_HOST` at it, so `docker build`
+and `docker run` work from the first shell. The daemon is privileged, so the CLI
+labels the namespace it creates with
+`pod-security.kubernetes.io/enforce=privileged`. Clusters that forbid privileged
+containers cannot use this flag.
+
 ## GPU
 
 Request GPUs with `--gpu`:
@@ -51,10 +102,23 @@ The script writes one block per environment into `~/.ssh/config.d/k8s-dev-envs` 
 
 VS Code Remote-SSH and JetBrains Gateway work with the alias `k8s-dev-<name>`.
 
+## Scripting
+
+`create` and `list` take `--json`. Progress goes to stderr, so stdout is one
+JSON document:
+
+```bash
+scripts/dev-env.sh create ci-1 --cpu 2 --memory 4Gi --no-check --json | jq -r .ssh_alias
+scripts/dev-env.sh list --json | jq -r '.[] | "\(.name) \(.phase)"'
+```
+
+Every prompt is skipped when flags provide the value, so an agent can create and
+inspect environments without a TTY.
+
 ## Justfile
 
 ```
-just lint      # render checks for CPU, GPU, and empty resources
+just lint      # render checks for CPU, GPU, ingress, sidecars, docker, empty resources
 just test      # kind cluster -> create env -> ssh check -> destroy
 just test-gpu  # nvkind cluster -> GPU env -> nvidia-smi check -> destroy
 ```
@@ -70,8 +134,19 @@ just test-gpu  # nvkind cluster -> GPU env -> nvidia-smi check -> destroy
 | `gpu.count`                            | `1` |
 | `gpu.runtimeClassName`                 | `nvidia` |
 | `ssh.authorizedKey`                    | `""` (use `--set-file`) |
+| `ingress.enabled`                      | `false` |
+| `ingress.host` / `ingress.port`        | `""` / `3000` |
+| `ingress.className`                    | `nginx` |
+| `ingress.clusterIssuer`                | `letsencrypt-cloudflare` |
+| `ingress.tls`                          | `true` |
+| `extraContainers`                      | `[]` |
+| `ports`                                | `[]` |
+| `docker.enabled`                       | `false` |
+| `docker.image.repository` / `.tag`     | `docker` / `28-dind` |
+| `docker.storage.sizeLimit`             | `20Gi` |
 
 `gpu.runtimeClassName` must name an existing RuntimeClass on the cluster.
+`docker.enabled` needs a namespace at the privileged Pod Security level.
 
 ## Project Structure
 
@@ -80,6 +155,7 @@ just test-gpu  # nvkind cluster -> GPU env -> nvidia-smi check -> destroy
 ├── charts/dev-env/             # Helm chart
 ├── scripts/
 │   ├── dev-env.sh              # Spawn/destroy/list script
+│   ├── dev-env.d/              # Subcommand implementations
 │   ├── create-cluster.sh       # Create kind cluster for tests
 │   └── test-gpu.sh             # GPU smoke test
 ├── docs/
@@ -91,10 +167,11 @@ just test-gpu  # nvkind cluster -> GPU env -> nvidia-smi check -> destroy
 
 ## Limitations
 
-- v1 targets kind only.
+- Tested on kind and on the lab dev cluster.
 - Ephemeral storage: all data is lost on pod restart.
 - GPU support requires an `nvidia` RuntimeClass and the NVIDIA device plugin. The GPU Operator provides both. `nvkind` provides the RuntimeClass for local kind tests.
-- SSH access only via port-forward.
+- SSH access is always via port-forward; web access is optional through an Ingress.
+- One Ingress host per environment.
 
 ## Contributing
 

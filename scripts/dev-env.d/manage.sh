@@ -1,35 +1,85 @@
 # dev-env: list and destroy subcommands (sourced by dev-env.sh)
 
+# Print one word describing the environment's pod: a phase, "no pods", or
+# "unreachable" when the context cannot be queried.
+env_phase() {
+  local ctx="$1" ns="$2" pods
+  if pods="$(kubectl --context "$ctx" get pods -l "app.kubernetes.io/instance=$ns" -n "$ns" \
+    -o jsonpath='{range .items[*]}{.metadata.name}={.status.phase}{"\n"}{end}' 2>/dev/null)"; then
+    if [[ -n "$pods" ]]; then
+      printf '%s\n' "$pods" | head -1 | cut -d= -f2
+    else
+      printf 'no pods\n'
+    fi
+  else
+    printf 'unreachable\n'
+  fi
+}
+
 cmd_list() {
   require_cmd kubectl
 
-  if [[ ! -d "$STATE_ROOT" ]]; then
-    echo "No environments found."
+  local json=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+    --json)
+      json=1
+      shift
+      ;;
+    -*) die "Unknown flag: $1" ;;
+    *) die "Unexpected argument: $1" ;;
+    esac
+  done
+  JSON_MODE="$json"
+
+  local dirs=()
+  if [[ -d "$STATE_ROOT" ]]; then
+    local d
+    for d in "$STATE_ROOT"/*/; do
+      [[ -d "$d" ]] && dirs+=("$d")
+    done
+  fi
+
+  if [[ ${#dirs[@]} -eq 0 ]]; then
+    if [[ "$json" -eq 1 ]]; then
+      printf '[]\n'
+    else
+      printf 'No environments found.\n'
+    fi
     return 0
   fi
 
-  printf '%-20s %-25s %-10s %-20s %s\n' "NAME" "CONTEXT" "PORT" "NAMESPACE" "PHASE"
-  printf '%s\n' "$(printf '%.0s-' {1..90})"
+  if [[ "$json" -eq 0 ]]; then
+    printf '%-20s %-25s %-8s %-20s %-12s %s\n' NAME CONTEXT PORT NAMESPACE PHASE URL
+    printf '%s\n' "$(printf '%.0s-' {1..100})"
+  else
+    printf '['
+  fi
 
-  for dir in "$STATE_ROOT"/*/; do
-    [[ -d "$dir" ]] || continue
-    local name port ns ctx
+  local first=1 name port ctx ns phase url dir
+  for dir in "${dirs[@]}"; do
+    apply_env_kubeconfig "$dir"
     name="$(basename "$dir")"
     port="$(cat "$dir/port")"
     ctx="$(cat "$dir/context")"
     ns="dev-$name"
+    url=""
+    [[ -f "$dir/url" ]] && url="$(cat "$dir/url")"
+    phase="$(env_phase "$ctx" "$ns")"
 
-    local phase="unreachable"
-    if pods="$(kubectl --context "$ctx" get pods -l "app.kubernetes.io/instance=$ns" -n "$ns" -o jsonpath='{range .items[*]}{.metadata.name}={.status.phase}{"\n"}{end}' 2>/dev/null)"; then
-      if [[ -n "$pods" ]]; then
-        phase="$(echo "$pods" | head -1 | cut -d= -f2)"
-      else
-        phase="no pods"
-      fi
+    if [[ "$json" -eq 1 ]]; then
+      [[ "$first" -eq 1 ]] || printf ','
+      first=0
+      printf '{"name":%s,"context":%s,"port":%s,"namespace":%s,"phase":%s,"url":%s}' \
+        "$(json_str "$name")" "$(json_str "$ctx")" "$port" \
+        "$(json_str "$ns")" "$(json_str "$phase")" "$(json_str "$url")"
+    else
+      printf '%-20s %-25s %-8s %-20s %-12s %s\n' "$name" "$ctx" "$port" "$ns" "$phase" "$url"
     fi
-
-    printf '%-20s %-25s %-10s %-20s %s\n' "$name" "$ctx" "$port" "$ns" "$phase"
   done
+
+  [[ "$json" -eq 1 ]] && printf ']\n'
+  return 0
 }
 
 cmd_destroy() {
@@ -66,6 +116,7 @@ cmd_destroy() {
 
   if [[ -d "$dir" ]]; then
     ctx="$(cat "$dir/context")"
+    apply_env_kubeconfig "$dir"
   else
     ctx="$(kubectl config current-context 2>/dev/null || true)"
   fi

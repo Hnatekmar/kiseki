@@ -11,5 +11,12 @@ spec:
       port: 22
       targetPort: ssh
       protocol: TCP
+{{- $ingress := .Values.ingress | default dict }}
+{{- if $ingress.enabled }}
+    - name: http
+      port: {{ int $ingress.port }}
+      targetPort: http
+      protocol: TCP
+{{- end }}
   selector:
     {{- include "dev-env.selectorLabels" . | nindent 4 }}
