@@ -6,6 +6,20 @@ Kubernetes dev environments. Each environment is one Fedora 42 pod, reached over
 
 kind, kubectl, helm, just, socat, and an ssh client. The smoke test uses the public key at `~/.ssh/id_ed25519.pub`. For your own environments the script auto-detects keys under `~/.ssh` or takes `--ssh-key`. The GPU test also needs `nvkind`, an NVIDIA driver, and the NVIDIA container toolkit.
 
+## Install as a command
+
+Put `dev-env` on PATH with a symlink to this checkout, so edits take effect
+immediately:
+
+```bash
+./scripts/install.sh                       # ~/.local/bin/dev-env
+./scripts/install.sh --prefix /usr/local   # system-wide (needs write access)
+./scripts/install.sh --uninstall
+```
+
+`just install` does the same. The installer refuses to overwrite a regular file
+and will not uninstall a symlink that points somewhere other than this checkout.
+
 ## Quick Start
 
 Run the full smoke test. It recreates the kind cluster `dev-envs-test-cluster` (deletes it first), spawns an environment, checks SSH, then tears everything down. Recreating the cluster deletes any other environments on it:
@@ -156,6 +170,7 @@ just test-gpu  # nvkind cluster -> GPU env -> nvidia-smi check -> destroy
 ├── scripts/
 │   ├── dev-env.sh              # Spawn/destroy/list script
 │   ├── dev-env.d/              # Subcommand implementations
+│   ├── install.sh              # Symlink the CLI into a bin directory
 │   ├── create-cluster.sh       # Create kind cluster for tests
 │   └── test-gpu.sh             # GPU smoke test
 ├── docs/

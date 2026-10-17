@@ -23,6 +23,12 @@ lint:
     ! ./scripts/dev-env.sh create x --port 3000 >/dev/null 2>&1
     ! ./scripts/dev-env.sh create x --address app.example.com --port 22 >/dev/null 2>&1
     ! ./scripts/dev-env.sh create x --address not-a-host --port 3000 >/dev/null 2>&1
+    # installer round trip in a throwaway bin directory
+    tmp=$(mktemp -d) && ./scripts/install.sh --bindir "$tmp" >/dev/null && "$tmp/dev-env" --help >/dev/null && ./scripts/install.sh --uninstall --bindir "$tmp" >/dev/null && [ ! -e "$tmp/dev-env" ] && rm -rf "$tmp"
+
+# Install the CLI into ~/.local/bin (override with PREFIX or --bindir)
+install:
+    ./scripts/install.sh
 
 # Smoke test: fresh kind cluster -> create env -> ssh -> destroy env
 test: lint
