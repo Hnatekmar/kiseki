@@ -1,7 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
-echo "=== provisioning dev environment ==="
+echo "=== provisioning kiseki environment ==="
+
+# A persistent volume mounted at /root arrives with the provisioner's mode
+# (local-path gives 0777). sshd's StrictModes refuses a group- or
+# world-writable home directory, and the client only sees a bare
+# "Permission denied (publickey)". Normalize it before sshd starts.
+chown root:root /root
+chmod 755 /root
 
 # docker-cli is only needed when the chart wired up the dind sidecar.
 need_install=0
@@ -21,7 +28,7 @@ ssh-keygen -A
 mkdir -p /run/sshd /usr/share/empty.sshd
 
 mkdir -p /root/.ssh
-cp /etc/dev-ssh/authorized_keys /root/.ssh/authorized_keys
+cp /etc/kiseki-ssh/authorized_keys /root/.ssh/authorized_keys
 chmod 700 /root/.ssh
 chmod 600 /root/.ssh/authorized_keys
 
@@ -51,9 +58,9 @@ fi
 # Wait for the sidecar ports the chart declared. A dev container that connects
 # to redis or postgres at startup would otherwise race them, and the failure
 # surfaces as the app crashing rather than as a missing dependency.
-if [ -n "${DEV_ENV_WAIT_PORTS:-}" ]; then
-  echo "=== waiting for sidecar ports: $DEV_ENV_WAIT_PORTS ==="
-  for port in $DEV_ENV_WAIT_PORTS; do
+if [ -n "${KISEKI_WAIT_PORTS:-}" ]; then
+  echo "=== waiting for sidecar ports: $KISEKI_WAIT_PORTS ==="
+  for port in $KISEKI_WAIT_PORTS; do
     ready=0
     for _ in $(seq 1 120); do
       if (echo >/dev/tcp/127.0.0.1/"$port") >/dev/null 2>&1; then

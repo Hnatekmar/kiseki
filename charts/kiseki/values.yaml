@@ -22,8 +22,12 @@ ssh:
 fullnameOverride: ""
 
 storage:
+  # Persist the container's home directory. Everything installed under /root
+  # (dotfiles, toolchains, shell history, the dots bootstrap) survives a pod
+  # restart. /workdir stays ephemeral: it only holds the dots checkout that
+  # provisioning pulls on every start.
   enabled: false
-  size: 1Gi
+  size: 10Gi
   storageClass: truenas-nvmeof
 
 # One container port published through an Ingress. The dev container listens on
@@ -78,7 +82,7 @@ extraContainers: []
 # docker:dind sidecar. The dev container gets DOCKER_HOST pointing at it and
 # the provisioning script installs the docker CLI. Requires a privileged
 # container, so the namespace needs the privileged Pod Security level:
-# `dev-env create --docker` labels the namespace it creates. A chart installed
+# `kiseki create --docker` labels the namespace it creates. A chart installed
 # by hand must set that label first, or the pod is rejected on clusters that
 # enforce baseline.
 docker:

@@ -4,7 +4,7 @@ This document provides guidelines for AI agents working on this repository.
 
 ## Project Overview
 
-This repository provides Kubernetes-based development environments using a Helm chart and a Bash spawn script. Tests run on a local kind cluster.
+This repository provides Kubernetes-based development environments using a Helm chart and a Bash spawn script. The project is named Kiseki (formerly `dev-envs`). Tests run on a local kind cluster.
 
 ## Technology Stack
 
@@ -22,7 +22,7 @@ This repository provides Kubernetes-based development environments using a Helm 
 - Do not use emoji prefixes.
 
 ### File Structure
-- Chart lives in `charts/dev-env/`
+- Chart lives in `charts/kiseki/`
 - Scripts live in `scripts/`
 - Root-level docs for user-facing information (README.md, AGENTS.md)
 - Keep documentation concise and actionable
@@ -41,9 +41,10 @@ This repository provides Kubernetes-based development environments using a Helm 
 - Comment non-obvious logic.
 
 ### Provisioning Script
-- The provisioning script (`charts/dev-env/static/up.sh`) runs at container start.
+- The provisioning script (`charts/kiseki/static/up.sh`) runs at container start.
 - It must stay idempotent: re-runnable without errors.
 - Do not use `chsh` on `fedora:42` (it is not available).
+- User state belongs in `/root`. `/workdir` is recreated on every start and must stay disposable.
 
 ### Secret Volumes
 - Secret volume mounts are read-only inside the container.
@@ -79,10 +80,10 @@ kubectl --context <ctx> logs -l app.kubernetes.io/instance=<release> -n <namespa
 ### SSH Debugging
 
 ```bash
-ssh -v k8s-dev-<name>
+ssh -v kiseki-<name>
 ```
 
-The port-forward log is at `~/.local/state/dev-env/<name>/forward.log`.
+The port-forward log is at `~/.local/state/kiseki/<name>/forward.log`.
 
 ### Terminating Namespace After Destroy
 
@@ -97,7 +98,7 @@ kubectl delete namespace dev-<name> --force --grace-period=0
 A privileged container (the `--docker` dind sidecar) is rejected on clusters that
 enforce the baseline Pod Security standard. The ReplicaSet records
 `violates PodSecurity "baseline:latest"`, while the rollout only shows a timeout.
-`dev-env create --docker` labels the namespace it creates; a hand-installed
+`kiseki create --docker` labels the namespace it creates; a hand-installed
 chart needs the label first:
 
 ```bash

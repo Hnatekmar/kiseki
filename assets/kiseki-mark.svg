@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Kiseki">
+<g transform="translate(0 0) scale(1)">
+  <defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#111C33"/><stop offset="1" stop-color="#070B14"/></linearGradient>
+    <linearGradient id="spark" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFD36E"/><stop offset="1" stop-color="#F59E0B"/></linearGradient>
+  </defs>
+  <rect x="24" y="24" width="464" height="464" rx="112" fill="url(#bg)"/>
+  
+  <path d="M 318 140 H 188 A 48 48 0 0 0 140 188 V 324 A 48 48 0 0 0 188 372 H 324 A 48 48 0 0 0 372 324 V 194"
+        fill="none" stroke="#F8FAFC" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 374 86 C 374 126 390 142 430 142 C 390 142 374 158 374 198 C 374 158 358 142 318 142 C 358 142 374 126 374 86 Z"
+        fill="url(#spark)"/>
+</g>
+</svg>

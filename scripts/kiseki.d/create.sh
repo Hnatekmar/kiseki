@@ -1,4 +1,4 @@
-# dev-env: create subcommand (sourced by dev-env.sh)
+# kiseki: create subcommand (sourced by kiseki.sh)
 
 # Append one sidecar spec to a YAML fragment.
 # Spec: name=image[:tag][,port=N][,env=KEY=VALUE][,env=KEY2=VALUE2]
@@ -71,6 +71,8 @@ cmd_create() {
   local key=""
   local no_check=0
   local persistence=0
+  local persistence_size=""
+  local storage_class=""
   local docker=0
   local address=""
   local web_port=""
@@ -134,6 +136,18 @@ cmd_create() {
       persistence=1
       shift
       ;;
+    --persistence-size)
+      [[ $# -ge 2 ]] || die "--persistence-size requires a size such as 20Gi"
+      persistence_size="$2"
+      persistence=1
+      shift 2
+      ;;
+    --storage-class)
+      [[ $# -ge 2 ]] || die "--storage-class requires a StorageClass name"
+      storage_class="$2"
+      persistence=1
+      shift 2
+      ;;
     --no-check)
       no_check=1
       shift
@@ -163,6 +177,18 @@ cmd_create() {
     fi
   fi
 
+  # A Kubernetes quantity: positive number with an optional binary or decimal
+  # suffix. Rejecting it here turns a typo into a flag error instead of a PVC
+  # that never binds.
+  if [[ -n "$persistence_size" ]]; then
+    [[ "$persistence_size" =~ ^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$ ]] ||
+      die "Invalid --persistence-size '$persistence_size': expected a quantity such as 20Gi"
+  fi
+  if [[ -n "$storage_class" ]]; then
+    [[ "$storage_class" =~ ^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$ ]] ||
+      die "Invalid --storage-class '$storage_class'"
+  fi
+
   # context
   if [[ -z "$ctx" ]]; then
     ctx="$(kubectl config current-context 2>/dev/null || true)"
@@ -185,18 +211,18 @@ cmd_create() {
     die "Invalid name '$name'. Must match ^[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?$"
   fi
 
-  local ns="dev-$name"
+  local ns="kiseki-$name"
   local dir="$STATE_ROOT/$name"
 
   # collision
   if [[ -d "$dir" ]]; then
-    die "State directory '$dir' already exists. Run 'dev-env destroy $name' first"
+    die "State directory '$dir' already exists. Run 'kiseki destroy $name' first"
   fi
   if helm --kube-context "$ctx" status "$ns" -n "$ns" >/dev/null 2>&1; then
-    die "Release '$ns' already exists in namespace '$ns' on context '$ctx'. Run 'dev-env destroy $name' first"
+    die "Release '$ns' already exists in namespace '$ns' on context '$ctx'. Run 'kiseki destroy $name' first"
   fi
   if kubectl --context "$ctx" get ns "$ns" >/dev/null 2>&1; then
-    die "Namespace '$ns' already exists on context '$ctx'. Run 'dev-env destroy $name' first"
+    die "Namespace '$ns' already exists on context '$ctx'. Run 'kiseki destroy $name' first"
   fi
 
   # sidecar names must be unique inside the pod
@@ -299,10 +325,14 @@ cmd_create() {
   [[ -n "$address" ]] && log "  Address: https://$address -> :$web_port"
   [[ ${#containers[@]} -gt 0 ]] && log "  Sidecars: ${containers[*]}"
   [[ "$docker" -eq 1 ]] && log "  Docker:  dind sidecar"
+  [[ "$persistence" -eq 1 ]] &&
+    log "  Home:    ${persistence_size:-10Gi} persistent${storage_class:+ on $storage_class}"
 
   # helm install
   if [[ "$persistence" -eq 1 ]]; then
     extra+=(--set "storage.enabled=true")
+    [[ -n "$persistence_size" ]] && extra+=(--set "storage.size=$persistence_size")
+    [[ -n "$storage_class" ]] && extra+=(--set "storage.storageClass=$storage_class")
   fi
   if [[ "$gpu" -gt 0 ]]; then
     extra+=(--set "gpu.enabled=true" --set "gpu.count=$gpu")
@@ -356,7 +386,7 @@ cmd_create() {
     [[ -n "$container" ]] && sidecar_names+=("$container")
   done < <(kubectl --context "$ctx" get deployment "$ns" -n "$ns" \
     -o jsonpath='{range .spec.template.spec.containers[*]}{.name}{"\n"}{end}' 2>/dev/null |
-    grep -vxE 'dev-env|docker' || true)
+    grep -vxE 'kiseki|docker' || true)
 
   # allocate port
   local port
@@ -383,8 +413,8 @@ cmd_create() {
   abs_script="$(readlink -f "$0")"
   {
     printf '\n'
-    printf '# >>> dev-env %s >>>\n' "$name"
-    printf 'Host k8s-dev-%s\n' "$name"
+    printf '# >>> kiseki %s >>>\n' "$name"
+    printf 'Host kiseki-%s\n' "$name"
     printf '    User root\n'
     printf '    ProxyCommand %s proxy %%h\n' "$abs_script"
     printf '    StrictHostKeyChecking no\n'
@@ -394,16 +424,16 @@ cmd_create() {
     printf '    ServerAliveInterval 30\n'
     printf '    ServerAliveCountMax 3\n'
     printf '    LogLevel ERROR\n'
-    printf '# <<< dev-env %s <<<\n' "$name"
+    printf '# <<< kiseki %s <<<\n' "$name"
   } >>"$MANAGED_SSH"
 
   # connectivity check
   if [[ "$no_check" -eq 0 ]]; then
     log "Running SSH connectivity check..."
-    if ! run_quiet ssh -o BatchMode=yes -o ConnectTimeout=15 "k8s-dev-$name" true; then
+    if ! run_quiet ssh -o BatchMode=yes -o ConnectTimeout=15 "kiseki-$name" true; then
       err ""
       err "Environment '$name' exists but SSH check failed."
-      err "Debug: ssh -v k8s-dev-$name"
+      err "Debug: ssh -v kiseki-$name"
       exit 1
     fi
   fi
@@ -418,7 +448,7 @@ cmd_create() {
       "$(json_str "$name")" \
       "$(json_str "$ns")" \
       "$(json_str "$ctx")" \
-      "$(json_str "k8s-dev-$name")" \
+      "$(json_str "kiseki-$name")" \
       "$port" \
       "$(json_str "$url")" \
       "$json_containers" \
@@ -428,7 +458,7 @@ cmd_create() {
 
   log ""
   log "Environment '$name' is ready!"
-  log "  SSH alias:   k8s-dev-$name"
+  log "  SSH alias:   kiseki-$name"
   log "  Namespace:   $ns"
   log "  Context:     $ctx"
   log "  Port:        $port"

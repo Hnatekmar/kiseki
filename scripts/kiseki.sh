@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# dev-env: spawn and destroy Kubernetes dev environments
+# kiseki: spawn and destroy Kubernetes dev environments
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 
-source "$SCRIPT_DIR/dev-env.d/lib.sh"
-source "$SCRIPT_DIR/dev-env.d/create.sh"
-source "$SCRIPT_DIR/dev-env.d/manage.sh"
-source "$SCRIPT_DIR/dev-env.d/proxy.sh"
-source "$SCRIPT_DIR/dev-env.d/example.sh"
+source "$SCRIPT_DIR/kiseki.d/lib.sh"
+source "$SCRIPT_DIR/kiseki.d/create.sh"
+source "$SCRIPT_DIR/kiseki.d/manage.sh"
+source "$SCRIPT_DIR/kiseki.d/proxy.sh"
+source "$SCRIPT_DIR/kiseki.d/example.sh"
 
 cmd_help() {
   cat <<'EOF'
-dev-env: Kubernetes dev environment manager
+kiseki: Kubernetes dev environment manager
 
-Usage: dev-env <command> [options]
+Usage: kiseki <command> [options]
 
 Commands:
   create [<name>] [options]   Create a new dev environment
@@ -36,7 +36,11 @@ Create options:
   --container SPEC    Sidecar in the pod, repeatable:
                       name=IMAGE[:TAG][,port=N][,env=KEY=VALUE]
   --docker            Add a docker:dind sidecar and set DOCKER_HOST
-  --persistence       Enable persistent volume (default 1Gi)
+  --persistence       Persist /root on a PVC (default 10Gi)
+  --persistence-size SIZE
+                      PVC size, implies --persistence (e.g. 20Gi)
+  --storage-class CLASS
+                      StorageClass for the PVC, implies --persistence
   --set KEY=VALUE     Helm value override, repeatable (e.g. image.tag=43)
   -f, --values FILE   Helm values file, repeatable
   --json              Print one JSON object on stdout, progress on stderr
@@ -46,14 +50,14 @@ Destroy options:
   -f                  Force destroy without confirmation
 
 Examples:
-  dev-env create my-env --cpu 2 --memory 4Gi
-  dev-env create web --address app.dev-k8s.srv.example.com --port 3000
-  dev-env create api --container redis=redis:7-alpine,port=6379 --container pg=postgres:17
-  dev-env example > extraSVC.yaml      # sidecars with volumes and an init container
-  dev-env create api -f extraSVC.yaml
-  dev-env create build --docker --persistence --set storage.size=20Gi
-  dev-env list --json
-  dev-env destroy my-env -f
+  kiseki create my-env --cpu 2 --memory 4Gi
+  kiseki create web --address app.dev-k8s.srv.example.com --port 3000
+  kiseki create api --container redis=redis:7-alpine,port=6379 --container pg=postgres:17
+  kiseki example > extraSVC.yaml      # sidecars with volumes and an init container
+  kiseki create api -f extraSVC.yaml
+  kiseki create build --docker --persistence --set storage.size=20Gi
+  kiseki list --json
+  kiseki destroy my-env -f
 EOF
 }
 

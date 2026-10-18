@@ -3,7 +3,7 @@
 Status: accepted
 
 Web work needs a channel that SSH does not provide: a server on a container port
-that a browser can reach. `dev-env create --address HOST --port PORT` creates a
+that a browser can reach. `kiseki create --address HOST --port PORT` creates a
 Service port and an Ingress with a cert-manager certificate, instead of a
 `kubectl port-forward` on the workstation. A port-forward ties the URL to one
 machine, needs a process per environment, and dies with the terminal. An Ingress
@@ -25,7 +25,7 @@ their state is ephemeral unless the environment has a persistent volume.
 
 The dind sidecar needs `privileged: true`. Clusters that enforce the baseline Pod
 Security standard reject that pod at creation time, and the rollout only reports
-a timeout. `dev-env create --docker` therefore labels the namespace it creates
+a timeout. `kiseki create --docker` therefore labels the namespace it creates
 with `pod-security.kubernetes.io/enforce=privileged`. That widening is scoped to
 one disposable namespace and the CLI prints it. We rejected asking the user to
 label the namespace by hand: the failure appears as a pod that never starts, and

@@ -1,4 +1,13 @@
-# Dev Environments
+# Kiseki (奇跡)
+
+> They work — and that's the miracle.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/kiseki-logo-dark.svg">
+    <img src="assets/kiseki-logo-light.svg" alt="Kiseki" width="420">
+  </picture>
+</p>
 
 Kubernetes dev environments. Each environment is one Fedora 42 pod, reached over `kubectl port-forward` and an SSH alias. Managed with a Helm chart and a Bash spawn script. A pod can carry sidecar containers (redis, postgres, …), a docker daemon for image builds, and one Ingress for web work.
 
@@ -8,11 +17,11 @@ kind, kubectl, helm, just, socat, and an ssh client. The smoke test uses the pub
 
 ## Install as a command
 
-Put `dev-env` on PATH with a symlink to this checkout, so edits take effect
+Put `kiseki` on PATH with a symlink to this checkout, so edits take effect
 immediately:
 
 ```bash
-./scripts/install.sh                       # ~/.local/bin/dev-env
+./scripts/install.sh                       # ~/.local/bin/kiseki
 ./scripts/install.sh --prefix /usr/local   # system-wide (needs write access)
 ./scripts/install.sh --uninstall
 ```
@@ -22,7 +31,7 @@ and will not uninstall a symlink that points somewhere other than this checkout.
 
 ## Quick Start
 
-Run the full smoke test. It recreates the kind cluster `dev-envs-test-cluster` (deletes it first), spawns an environment, checks SSH, then tears everything down. Recreating the cluster deletes any other environments on it:
+Run the full smoke test. It recreates the kind cluster `kiseki-test-cluster` (deletes it first), spawns an environment, checks SSH, then tears everything down. Recreating the cluster deletes any other environments on it:
 
 ```bash
 just test
@@ -31,28 +40,48 @@ just test
 Create an environment. CPU and memory prompt on a TTY. Flags override. Omit `--context` to use the current kubectl context.
 
 ```bash
-scripts/dev-env.sh create my-env --cpu 4 --memory 8Gi --ssh-key ~/.ssh/id_ed25519.pub
+scripts/kiseki.sh create my-env --cpu 4 --memory 8Gi --ssh-key ~/.ssh/id_ed25519.pub
 ```
 
 Connect, list, and destroy:
 
 ```bash
-ssh k8s-dev-my-env
-scripts/dev-env.sh list
-scripts/dev-env.sh destroy my-env
-scripts/dev-env.sh destroy my-env -f   # no confirmation
+ssh kiseki-my-env
+scripts/kiseki.sh list
+scripts/kiseki.sh destroy my-env
+scripts/kiseki.sh destroy my-env -f   # no confirmation
 ```
 
 ## What You Get
 
-A single `fedora:42` pod with one container running `openssh-server` and `zsh`. You log in as `root` inside the pod. Storage is ephemeral (no PVC). No GPU by default. Startup installs packages via dnf and starts sshd.
+A single `fedora:42` pod with one container running `openssh-server` and `zsh`. You log in as `root` inside the pod. No GPU by default. Startup installs packages via dnf and starts sshd.
+
+The home directory is ephemeral unless you pass `--persistence`. `/workdir` is always ephemeral: provisioning clones [dots](https://github.com/Hnatekmar/dots) there and runs its bootstrap on every start, so tools land in `/root` and the checkout itself does not need to survive.
+
+## Persistent home
+
+`--persistence` claims a PVC and mounts it at `/root`, so dotfiles, toolchains, caches, and shell history survive a pod restart:
+
+```bash
+scripts/kiseki.sh create work --persistence --persistence-size 20Gi
+```
+
+The default is 10Gi on the chart's `storage.storageClass` (`truenas-nvmeof`). Pass `--storage-class` to use another class. Only the home directory is persistent; the container image, `/workdir`, and the dind sidecar's image store are not.
+
+The Deployment uses the `Recreate` strategy, so a restart detaches the `ReadWriteOnce` volume before the new pod starts:
+
+```bash
+kubectl rollout restart deployment/kiseki-work -n kiseki-work
+```
+
+The SSH helper waits for the replacement pod and replaces a port-forward that still points at the old one, so the next `ssh kiseki-work` reconnects without manual cleanup.
 
 ## Web access
 
 Publish one container port through an Ingress:
 
 ```bash
-scripts/dev-env.sh create web --address web.dev-k8s.srv.hnatekmar.dev --port 3000
+scripts/kiseki.sh create web --address web.dev-k8s.srv.hnatekmar.dev --port 3000
 ```
 
 `--address` is the hostname, `--port` is the port the app listens on inside the
@@ -70,7 +99,7 @@ works over SSH.
 Run extra containers in the pod, sharing its network namespace:
 
 ```bash
-scripts/dev-env.sh create api \
+scripts/kiseki.sh create api \
   --container redis=redis:7-alpine,port=6379 \
   --container pg=postgres:17,port=5432,env=POSTGRES_PASSWORD=dev
 ```
@@ -84,9 +113,9 @@ Anything richer — volumes, init containers, commands, resource limits, probes 
 goes in a values file. Generate the file instead of remembering the shape:
 
 ```bash
-scripts/dev-env.sh example                          # print to stdout
-scripts/dev-env.sh example --output extraSVC.yaml   # write and render-check it
-scripts/dev-env.sh create api -f extraSVC.yaml --address api.dev-k8s.srv.hnatekmar.dev --port 8080
+scripts/kiseki.sh example                          # print to stdout
+scripts/kiseki.sh example --output extraSVC.yaml   # write and render-check it
+scripts/kiseki.sh create api -f extraSVC.yaml --address api.dev-k8s.srv.hnatekmar.dev --port 8080
 ```
 
 [`examples/extraSVC.yaml`](examples/extraSVC.yaml) is that file, committed and
@@ -103,13 +132,15 @@ The values keys are:
 | `extraVolumeMounts` | mounts added to the dev container |
 | `extraInitContainers` | run to completion before anything else starts |
 
-Sidecar state is ephemeral unless the volume points at a PVC (`--persistence`
-provides `data` as a claim).
+Sidecar state is ephemeral unless its volume points at a claim. `--persistence`
+creates one claim (`data`) for the home directory; a sidecar that needs durable
+state can mount that claim under its own path, or use a PVC created alongside
+the release.
 
 ## Docker builds
 
 ```bash
-scripts/dev-env.sh create build --docker
+scripts/kiseki.sh create build --docker
 ```
 
 Adds a `docker:dind` sidecar and points `DOCKER_HOST` at it, so `docker build`
@@ -123,7 +154,7 @@ containers cannot use this flag.
 Request GPUs with `--gpu`:
 
 ```bash
-scripts/dev-env.sh create gpu-env --gpu 1
+scripts/kiseki.sh create gpu-env --gpu 1
 ```
 
 The cluster must have an `nvidia` RuntimeClass and the NVIDIA device plugin. The GPU Operator provides both. For a local kind test, use `just test-gpu`. It uses `nvkind` and installs the device plugin.
@@ -132,9 +163,9 @@ Use a recent `nvkind` build. `go install github.com/NVIDIA/nvkind/cmd/nvkind@mai
 
 ## How SSH Works
 
-The script writes one block per environment into `~/.ssh/config.d/k8s-dev-envs` and adds an `Include` directive to `~/.ssh/config` on first use. Every alias uses `ProxyCommand` to run `scripts/dev-env.sh proxy <alias>`, which starts a `kubectl port-forward` (port 2200-2299) and bridges it with `socat`. The script disables host-key checking. It uses `StrictHostKeyChecking no` and `UserKnownHostsFile /dev/null`. Pod keys regenerate on every start. The Kubernetes API channel is the trust boundary.
+The script writes one block per environment into `~/.ssh/config.d/kiseki` and adds an `Include` directive to `~/.ssh/config` on first use. Every alias uses `ProxyCommand` to run `scripts/kiseki.sh proxy <alias>`, which starts a `kubectl port-forward` (port 2200-2299) and bridges it with `socat`. The script disables host-key checking. It uses `StrictHostKeyChecking no` and `UserKnownHostsFile /dev/null`. Pod keys regenerate on every start. The Kubernetes API channel is the trust boundary.
 
-VS Code Remote-SSH and JetBrains Gateway work with the alias `k8s-dev-<name>`.
+VS Code Remote-SSH and JetBrains Gateway work with the alias `kiseki-<name>`.
 
 ## Scripting
 
@@ -142,8 +173,8 @@ VS Code Remote-SSH and JetBrains Gateway work with the alias `k8s-dev-<name>`.
 JSON document:
 
 ```bash
-scripts/dev-env.sh create ci-1 --cpu 2 --memory 4Gi --no-check --json | jq -r .ssh_alias
-scripts/dev-env.sh list --json | jq -r '.[] | "\(.name) \(.phase)"'
+scripts/kiseki.sh create ci-1 --cpu 2 --memory 4Gi --no-check --json | jq -r .ssh_alias
+scripts/kiseki.sh list --json | jq -r '.[] | "\(.name) \(.phase)"'
 ```
 
 Every prompt is skipped when flags provide the value, so an agent can create and
@@ -168,6 +199,9 @@ just test-gpu  # nvkind cluster -> GPU env -> nvidia-smi check -> destroy
 | `gpu.count`                            | `1` |
 | `gpu.runtimeClassName`                 | `nvidia` |
 | `ssh.authorizedKey`                    | `""` (use `--set-file`) |
+| `storage.enabled`                      | `false` |
+| `storage.size`                         | `10Gi` |
+| `storage.storageClass`                 | `truenas-nvmeof` |
 | `ingress.enabled`                      | `false` |
 | `ingress.host` / `ingress.port`        | `""` / `3000` |
 | `ingress.className`                    | `nginx` |
@@ -189,10 +223,11 @@ just test-gpu  # nvkind cluster -> GPU env -> nvidia-smi check -> destroy
 
 ```
 .
-├── charts/dev-env/             # Helm chart
+├── charts/kiseki/             # Helm chart
+├── assets/                    # Logo (SVG + PNG)
 ├── scripts/
-│   ├── dev-env.sh              # Spawn/destroy/list script
-│   ├── dev-env.d/              # Subcommand implementations
+│   ├── kiseki.sh              # Spawn/destroy/list script
+│   ├── kiseki.d/              # Subcommand implementations
 │   ├── install.sh              # Symlink the CLI into a bin directory
 │   ├── create-cluster.sh       # Create kind cluster for tests
 │   └── test-gpu.sh             # GPU smoke test
@@ -206,10 +241,31 @@ just test-gpu  # nvkind cluster -> GPU env -> nvidia-smi check -> destroy
 ## Limitations
 
 - Tested on kind and on the lab dev cluster.
-- Ephemeral storage: all data is lost on pod restart.
+- `/workdir` and the container filesystem are ephemeral. `/root` persists only with `--persistence`.
+- Existing environments created by the old `dev-env` CLI are not adopted; see [Migrating from dev-envs](#migrating-from-dev-envs).
 - GPU support requires an `nvidia` RuntimeClass and the NVIDIA device plugin. The GPU Operator provides both. `nvkind` provides the RuntimeClass for local kind tests.
 - SSH access is always via port-forward; web access is optional through an Ingress.
 - One Ingress host per environment.
+
+## Migrating from dev-envs
+
+The project was renamed from `dev-envs` to `kiseki`, and the CLI, namespace prefix, and SSH alias changed with it:
+
+| Before | After |
+|---|---|
+| `dev-env create` | `kiseki create` |
+| state in `~/.local/state/dev-env` | `~/.local/state/kiseki` |
+| namespace `dev-<name>` | `kiseki-<name>` |
+| SSH alias `k8s-dev-<name>` | `kiseki-<name>` |
+
+Environments created by the old CLI are not discovered or adopted. Destroy them with a checkout of the last `dev-envs` commit before switching:
+
+```bash
+git clone https://github.com/hnatekmarorg/dev-envs.git /tmp/dev-envs-old
+/tmp/dev-envs-old/scripts/dev-env.sh destroy <name>
+```
+
+Then recreate the environment with `kiseki`. The old `~/.ssh/config.d/k8s-dev-envs` block is inert once its script path disappears; delete the file if you no longer need the aliases.
 
 ## Contributing
 

@@ -1,9 +1,9 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "dev-env.fullname" . }}
+  name: {{ include "kiseki.fullname" . }}
   labels:
-    {{- include "dev-env.labels" . | nindent 4 }}
+    {{- include "kiseki.labels" . | nindent 4 }}
 spec:
   replicas: 1
   progressDeadlineSeconds: 1200
@@ -11,11 +11,11 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      {{- include "dev-env.selectorLabels" . | nindent 6 }}
+      {{- include "kiseki.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "dev-env.selectorLabels" . | nindent 8 }}
+        {{- include "kiseki.selectorLabels" . | nindent 8 }}
     spec:
 {{- $gpu := .Values.gpu | default dict }}
 {{- if $gpu.enabled }}
@@ -44,7 +44,7 @@ spec:
 {{- end }}
 {{- $docker := .Values.docker | default dict }}
 {{- range .Values.extraContainers }}
-{{- if has .name (list "dev-env" "docker") }}
+{{- if has .name (list "kiseki" "docker") }}
 {{- fail (printf "extraContainers: name %q is reserved" .name) }}
 {{- end }}
 {{- if not .image }}
@@ -83,17 +83,17 @@ spec:
 {{- $env = append $env (dict "name" "DOCKER_HOST" "value" "tcp://127.0.0.1:2375") }}
 {{- end }}
 {{- if $waitPorts }}
-{{- $env = append $env (dict "name" "DEV_ENV_WAIT_PORTS" "value" (join " " $waitPorts)) }}
+{{- $env = append $env (dict "name" "KISEKI_WAIT_PORTS" "value" (join " " $waitPorts)) }}
 {{- end }}
 {{- with .Values.extraInitContainers }}
       initContainers:
         {{- toYaml . | nindent 8 }}
 {{- end }}
       containers:
-        - name: dev-env
+        - name: kiseki
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: ["/bin/bash", "/etc/dev-env/up.sh"]
+          command: ["/bin/bash", "/etc/kiseki/up.sh"]
           ports:
             - name: ssh
               containerPort: 22
@@ -125,14 +125,17 @@ spec:
             failureThreshold: 60
           volumeMounts:
             - name: provision
-              mountPath: /etc/dev-env
+              mountPath: /etc/kiseki
               readOnly: true
             - name: ssh-key
-              mountPath: /etc/dev-ssh
+              mountPath: /etc/kiseki-ssh
               readOnly: true
 {{- if .Values.storage.enabled }}
+            # The persistent volume is the home directory, not the working
+            # directory: toolchains and dotfiles live in /root, while /workdir
+            # is recreated from the dots checkout on every start.
             - name: data
-              mountPath: /data
+              mountPath: /root
 {{- end }}
 {{- with .Values.extraVolumeMounts }}
 {{- toYaml . | nindent 12 }}
@@ -162,15 +165,15 @@ spec:
       volumes:
         - name: provision
           configMap:
-            name: {{ include "dev-env.fullname" . }}-provision
+            name: {{ include "kiseki.fullname" . }}-provision
         - name: ssh-key
           secret:
-            secretName: {{ include "dev-env.fullname" . }}-ssh-key
+            secretName: {{ include "kiseki.fullname" . }}-ssh-key
             defaultMode: 0600
 {{- if .Values.storage.enabled }}
         - name: data
           persistentVolumeClaim:
-            claimName: {{ include "dev-env.fullname" . }}
+            claimName: {{ include "kiseki.fullname" . }}
 {{- end }}
 {{- if $docker.enabled }}
         - name: docker-data

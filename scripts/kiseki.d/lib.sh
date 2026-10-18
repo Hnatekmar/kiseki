@@ -1,16 +1,16 @@
-# dev-env: shared paths and helpers (sourced by dev-env.sh)
+# kiseki: shared paths and helpers (sourced by kiseki.sh)
 
-STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/dev-env"
-MANAGED_SSH="$HOME/.ssh/config.d/k8s-dev-envs"
+STATE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/kiseki"
+MANAGED_SSH="$HOME/.ssh/config.d/kiseki"
 SSH_CONFIG="$HOME/.ssh/config"
-CHART_DIR="$SCRIPT_DIR/../charts/dev-env"
+CHART_DIR="$SCRIPT_DIR/../charts/kiseki"
 
 # Machine-readable mode: human progress goes to stderr, so stdout carries a
 # single JSON document. Set by the --json flag.
 JSON_MODE="${JSON_MODE:-0}"
 
 err() {
-  printf 'dev-env: %s\n' "$*" >&2
+  printf 'kiseki: %s\n' "$*" >&2
 }
 
 die() {
@@ -114,10 +114,10 @@ find_free_port() {
 ensure_ssh_config() {
   mkdir -p "$(dirname "$MANAGED_SSH")"
   touch "$MANAGED_SSH"
-  if ! grep -q 'Include ~/.ssh/config.d/k8s-dev-envs' "$SSH_CONFIG" 2>/dev/null; then
+  if ! grep -q 'Include ~/.ssh/config.d/kiseki' "$SSH_CONFIG" 2>/dev/null; then
     local tmp
     tmp="$(mktemp)"
-    printf 'Include ~/.ssh/config.d/k8s-dev-envs\n' >"$tmp"
+    printf 'Include ~/.ssh/config.d/kiseki\n' >"$tmp"
     cat "$SSH_CONFIG" >>"$tmp" 2>/dev/null || true
     mv "$tmp" "$SSH_CONFIG"
   fi
@@ -129,12 +129,12 @@ remove_ssh_block() {
   local tmp
   tmp="$(mktemp)"
   while IFS= read -r line || [[ -n "$line" ]]; do
-    if [[ "$line" == "# >>> dev-env $name >>>" ]]; then
+    if [[ "$line" == "# >>> kiseki $name >>>" ]]; then
       found=1
       in_block=1
       continue
     fi
-    if [[ "$line" == "# <<< dev-env $name <<<" ]]; then
+    if [[ "$line" == "# <<< kiseki $name <<<" ]]; then
       in_block=0
       deleted=1
       continue
@@ -147,7 +147,7 @@ remove_ssh_block() {
 
   if [[ "$found" -eq 1 && "$deleted" -eq 1 ]]; then
     local count
-    count="$(grep -c '# >>> dev-env ' "$MANAGED_SSH" 2>/dev/null || true)"
+    count="$(grep -c '# >>> kiseki ' "$MANAGED_SSH" 2>/dev/null || true)"
     mv "$tmp" "$MANAGED_SSH"
     if [[ "$count" -eq 1 ]]; then
       rm -f "$MANAGED_SSH"

@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Creates or recreates the test cluster. Use --gpu for an nvkind cluster.
 
-CLUSTER_NAME=dev-envs-test-cluster
+CLUSTER_NAME=kiseki-test-cluster
 GPU=0
 
 case "${1:-}" in

@@ -1,4 +1,4 @@
-# dev-env: list and destroy subcommands (sourced by dev-env.sh)
+# kiseki: list and destroy subcommands (sourced by kiseki.sh)
 
 # Print one word describing the environment's pod: a phase, "no pods", or
 # "unreachable" when the context cannot be queried.
@@ -62,7 +62,7 @@ cmd_list() {
     name="$(basename "$dir")"
     port="$(cat "$dir/port")"
     ctx="$(cat "$dir/context")"
-    ns="dev-$name"
+    ns="kiseki-$name"
     url=""
     [[ -f "$dir/url" ]] && url="$(cat "$dir/url")"
     phase="$(env_phase "$ctx" "$ns")"
@@ -111,7 +111,7 @@ cmd_destroy() {
   fi
 
   local dir="$STATE_ROOT/$name"
-  local ns="dev-$name"
+  local ns="kiseki-$name"
   local ctx=""
 
   if [[ -d "$dir" ]]; then

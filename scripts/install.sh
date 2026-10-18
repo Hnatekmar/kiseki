@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Put dev-env on PATH.
+# Put kiseki on PATH.
 #
 #   ./scripts/install.sh                     # symlink into ~/.local/bin
 #   ./scripts/install.sh --prefix /usr/local # system-wide, needs write access
@@ -12,7 +12,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-SOURCE="$SCRIPT_DIR/dev-env.sh"
+SOURCE="$SCRIPT_DIR/kiseki.sh"
 
 PREFIX="${PREFIX:-$HOME/.local}"
 BINDIR="${BINDIR:-}"
@@ -61,7 +61,7 @@ done
 if [[ -z "$BINDIR" ]]; then
   BINDIR="$PREFIX/bin"
 fi
-TARGET="$BINDIR/dev-env"
+TARGET="$BINDIR/kiseki"
 
 if [[ "$UNINSTALL" -eq 1 ]]; then
   if [[ ! -L "$TARGET" ]]; then

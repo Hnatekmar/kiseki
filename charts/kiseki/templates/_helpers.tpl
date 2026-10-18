@@ -1,7 +1,7 @@
 {{/*
 Expand the name of the chart.
 */}}
-{{- define "dev-env.fullname" -}}
+{{- define "kiseki.fullname" -}}
   {{- if .Values.fullnameOverride -}}
     {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
   {{- else -}}
@@ -12,7 +12,7 @@ Expand the name of the chart.
 {{/*
 Common labels
 */}}
-{{- define "dev-env.labels" -}}
+{{- define "kiseki.labels" -}}
 app.kubernetes.io/name: {{ .Chart.Name }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
@@ -21,7 +21,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{/*
 Selector labels
 */}}
-{{- define "dev-env.selectorLabels" -}}
+{{- define "kiseki.selectorLabels" -}}
 app.kubernetes.io/name: {{ .Chart.Name }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
