@@ -1,3 +1,5 @@
+set shell := ["bash", "-cu"]
+
 # Render checks for CPU, GPU, ingress, sidecars, docker, and empty resources
 lint:
     helm lint charts/dev-env --set ssh.authorizedKey=test
@@ -18,6 +20,13 @@ lint:
     helm template test charts/dev-env --set ssh.authorizedKey=test --set docker.enabled=true | grep -q 'privileged: true'
     ! helm template test charts/dev-env --set ssh.authorizedKey=test --set-json 'extraContainers=[{"name":"docker","image":"x"}]' >/dev/null 2>&1
     ! helm template test charts/dev-env --set ssh.authorizedKey=test --set-json 'extraContainers=[{"name":"redis"}]' >/dev/null 2>&1
+    # volumes, init containers, and the sidecar wait list
+    helm template test charts/dev-env --set ssh.authorizedKey=test -f examples/extraSVC.yaml | grep -q 'DEV_ENV_WAIT_PORTS'
+    helm template test charts/dev-env --set ssh.authorizedKey=test -f examples/extraSVC.yaml | grep -q 'initContainers:'
+    ! helm template test charts/dev-env --set ssh.authorizedKey=test --set-json 'extraVolumes=[{"name":"data","emptyDir":{}}]' >/dev/null 2>&1
+    ! helm template test charts/dev-env --set ssh.authorizedKey=test --set-json 'extraVolumes=[{"name":"a","emptyDir":{}},{"name":"a","emptyDir":{}}]' >/dev/null 2>&1
+    # the committed example must match the generator
+    diff <(./scripts/dev-env.sh example) examples/extraSVC.yaml
     # CLI validation fails before it touches a cluster
     ! ./scripts/dev-env.sh create x --address app.example.com >/dev/null 2>&1
     ! ./scripts/dev-env.sh create x --port 3000 >/dev/null 2>&1
@@ -29,6 +38,10 @@ lint:
 # Install the CLI into ~/.local/bin (override with PREFIX or --bindir)
 install:
     ./scripts/install.sh
+
+# Regenerate the committed sidecar example
+example:
+    ./scripts/dev-env.sh example --output examples/extraSVC.yaml
 
 # Smoke test: fresh kind cluster -> create env -> ssh -> destroy env
 test: lint

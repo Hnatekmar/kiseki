@@ -76,15 +76,35 @@ scripts/dev-env.sh create api \
 ```
 
 `--container` takes `name=IMAGE[:TAG][,port=N][,env=KEY=VALUE]`, repeatable. The
-dev container reaches each one on `127.0.0.1:<port>`. For anything richer
-(commands, volumes, resources), pass a values file with `extraContainers:` in
-the chart's format:
+dev container reaches each one on `127.0.0.1:<port>`, and the provisioning script
+waits for every declared port before starting sshd, so an app cannot race redis
+or postgres at startup.
+
+Anything richer — volumes, init containers, commands, resource limits, probes —
+goes in a values file. Generate the file instead of remembering the shape:
 
 ```bash
-scripts/dev-env.sh create api -f sidecars.yaml
+scripts/dev-env.sh example                          # print to stdout
+scripts/dev-env.sh example --output extraSVC.yaml   # write and render-check it
+scripts/dev-env.sh create api -f extraSVC.yaml --address api.dev-k8s.srv.hnatekmar.dev --port 8080
 ```
 
-Sidecar state is ephemeral unless the environment has persistence.
+[`examples/extraSVC.yaml`](examples/extraSVC.yaml) is that file, committed and
+kept in sync by `just lint`. It adds redis and postgres sidecars, an `emptyDir`
+for postgres data, a seeding init container, and a shared volume mounted into the
+dev container at `/seed`.
+
+The values keys are:
+
+| Key | Effect |
+|-----|--------|
+| `extraContainers` | sidecars, full container specs; declared ports are waited on |
+| `extraVolumes` | pod-level volumes the sidecars can mount |
+| `extraVolumeMounts` | mounts added to the dev container |
+| `extraInitContainers` | run to completion before anything else starts |
+
+Sidecar state is ephemeral unless the volume points at a PVC (`--persistence`
+provides `data` as a claim).
 
 ## Docker builds
 
@@ -154,6 +174,9 @@ just test-gpu  # nvkind cluster -> GPU env -> nvidia-smi check -> destroy
 | `ingress.clusterIssuer`                | `letsencrypt-cloudflare` |
 | `ingress.tls`                          | `true` |
 | `extraContainers`                      | `[]` |
+| `extraVolumes`                         | `[]` |
+| `extraVolumeMounts`                    | `[]` |
+| `extraInitContainers`                  | `[]` |
 | `ports`                                | `[]` |
 | `docker.enabled`                       | `false` |
 | `docker.image.repository` / `.tag`     | `docker` / `28-dind` |

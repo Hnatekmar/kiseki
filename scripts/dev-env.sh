@@ -9,6 +9,7 @@ source "$SCRIPT_DIR/dev-env.d/lib.sh"
 source "$SCRIPT_DIR/dev-env.d/create.sh"
 source "$SCRIPT_DIR/dev-env.d/manage.sh"
 source "$SCRIPT_DIR/dev-env.d/proxy.sh"
+source "$SCRIPT_DIR/dev-env.d/example.sh"
 
 cmd_help() {
   cat <<'EOF'
@@ -20,6 +21,7 @@ Commands:
   create [<name>] [options]   Create a new dev environment
   list [--json]               List all active environments
   destroy <name> [-f]         Destroy an environment
+  example [--output FILE]     Print the sidecar values example, or write it
   proxy <alias>               Proxy SSH traffic (internal)
   help                        Show this help message
 
@@ -47,6 +49,8 @@ Examples:
   dev-env create my-env --cpu 2 --memory 4Gi
   dev-env create web --address app.dev-k8s.srv.example.com --port 3000
   dev-env create api --container redis=redis:7-alpine,port=6379 --container pg=postgres:17
+  dev-env example > extraSVC.yaml      # sidecars with volumes and an init container
+  dev-env create api -f extraSVC.yaml
   dev-env create build --docker --persistence --set storage.size=20Gi
   dev-env list --json
   dev-env destroy my-env -f
@@ -63,6 +67,7 @@ main() {
   create) cmd_create "$@" ;;
   list) cmd_list "$@" ;;
   destroy) cmd_destroy "$@" ;;
+  example) cmd_example "$@" ;;
   proxy) cmd_proxy "$@" ;;
   help | -h | --help) cmd_help ;;
   *)

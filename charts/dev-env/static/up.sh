@@ -48,6 +48,28 @@ if [ -n "${DOCKER_HOST:-}" ]; then
   done
 fi
 
+# Wait for the sidecar ports the chart declared. A dev container that connects
+# to redis or postgres at startup would otherwise race them, and the failure
+# surfaces as the app crashing rather than as a missing dependency.
+if [ -n "${DEV_ENV_WAIT_PORTS:-}" ]; then
+  echo "=== waiting for sidecar ports: $DEV_ENV_WAIT_PORTS ==="
+  for port in $DEV_ENV_WAIT_PORTS; do
+    ready=0
+    for _ in $(seq 1 120); do
+      if (echo >/dev/tcp/127.0.0.1/"$port") >/dev/null 2>&1; then
+        ready=1
+        break
+      fi
+      sleep 1
+    done
+    if [ "$ready" -eq 1 ]; then
+      echo "--- port $port is accepting connections"
+    else
+      echo "WARN: sidecar port $port did not open within 120s" >&2
+    fi
+  done
+fi
+
 mkdir -p /workdir
 # Re-running on a restarted pod with persistent storage must not fail on an
 # existing clone, so update in place instead of cloning unconditionally.

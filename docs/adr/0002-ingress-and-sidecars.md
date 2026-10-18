@@ -30,3 +30,11 @@ with `pod-security.kubernetes.io/enforce=privileged`. That widening is scoped to
 one disposable namespace and the CLI prints it. We rejected asking the user to
 label the namespace by hand: the failure appears as a pod that never starts, and
 the flag would be a promise the tool does not keep.
+
+Volumes, init containers, and port ordering complete the sidecar contract. A
+sidecar with no volume cannot hold state, and an app that connects to redis during
+startup races a container that starts in parallel; both failures look like a
+broken environment rather than a missing piece of configuration. Declared sidecar
+ports are therefore waited on before sshd starts, and `extraVolumes`,
+`extraVolumeMounts`, and `extraInitContainers` are pass-through pod fields with
+reserved-name checks rather than a second configuration language.

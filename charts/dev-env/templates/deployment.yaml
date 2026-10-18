@@ -51,6 +51,44 @@ spec:
 {{- fail (printf "extraContainers: %q needs an image" (.name | default "<unnamed>")) }}
 {{- end }}
 {{- end }}
+{{- $reservedVolumes := list "provision" "ssh-key" "docker-data" "data" }}
+{{- $volumeNames := list }}
+{{- range .Values.extraVolumes }}
+{{- if has .name $reservedVolumes }}
+{{- fail (printf "extraVolumes: name %q is reserved" .name) }}
+{{- end }}
+{{- if has .name $volumeNames }}
+{{- fail (printf "extraVolumes: duplicate name %q" .name) }}
+{{- end }}
+{{- $volumeNames = append $volumeNames .name }}
+{{- end }}
+{{- range .Values.extraInitContainers }}
+{{- if not .name }}
+{{- fail "extraInitContainers: every entry needs a name" }}
+{{- end }}
+{{- if not .image }}
+{{- fail (printf "extraInitContainers: %q needs an image" .name) }}
+{{- end }}
+{{- end }}
+{{- $waitPorts := list }}
+{{- range .Values.extraContainers }}
+{{- range .ports }}
+{{- if .containerPort }}
+{{- $waitPorts = append $waitPorts (int .containerPort) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- $env := list }}
+{{- if $docker.enabled }}
+{{- $env = append $env (dict "name" "DOCKER_HOST" "value" "tcp://127.0.0.1:2375") }}
+{{- end }}
+{{- if $waitPorts }}
+{{- $env = append $env (dict "name" "DEV_ENV_WAIT_PORTS" "value" (join " " $waitPorts)) }}
+{{- end }}
+{{- with .Values.extraInitContainers }}
+      initContainers:
+        {{- toYaml . | nindent 8 }}
+{{- end }}
       containers:
         - name: dev-env
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -68,10 +106,9 @@ spec:
 {{- with .Values.ports }}
 {{- toYaml . | nindent 12 }}
 {{- end }}
-{{- if $docker.enabled }}
+{{- with $env }}
           env:
-            - name: DOCKER_HOST
-              value: tcp://127.0.0.1:2375
+            {{- toYaml . | nindent 12 }}
 {{- end }}
           {{- $resources := .Values.resources }}
           {{- if $gpu.enabled }}
@@ -96,6 +133,9 @@ spec:
 {{- if .Values.storage.enabled }}
             - name: data
               mountPath: /data
+{{- end }}
+{{- with .Values.extraVolumeMounts }}
+{{- toYaml . | nindent 12 }}
 {{- end }}
 {{- with .Values.extraContainers }}
 {{- toYaml . | nindent 8 }}
@@ -136,4 +176,7 @@ spec:
         - name: docker-data
           emptyDir:
             sizeLimit: {{ ($docker.storage | default dict).sizeLimit | default "20Gi" }}
+{{- end }}
+{{- with .Values.extraVolumes }}
+{{- toYaml . | nindent 8 }}
 {{- end }}

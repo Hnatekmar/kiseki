@@ -42,8 +42,25 @@ ingress:
 # routes to them; they document the surface in the pod spec.
 ports: []
 
+# Extra volumes for sidecars, and mounts for the dev container. A volume is
+# only useful to the dev container if it also appears in extraVolumeMounts;
+# sidecars mount it through their own volumeMounts.
+#   extraVolumes:
+#     - name: pgdata
+#       emptyDir: {}
+#   extraVolumeMounts:
+#     - name: pgdata
+#       mountPath: /var/lib/postgresql   # only if the dev container needs it
+extraVolumes: []
+extraVolumeMounts: []
+
+# Containers that run to completion before the dev container and sidecars
+# start (database seeding, migrations, permission fixes).
+extraInitContainers: []
+
 # Sidecar containers that share the dev pod's network namespace, so the dev
-# container reaches them on 127.0.0.1:<port>. Accepts full container specs:
+# container reaches them on 127.0.0.1:<port>. Declaring a port makes the
+# provisioning script wait for it before sshd starts.
 #   extraContainers:
 #     - name: redis
 #       image: redis:7-alpine
@@ -53,6 +70,9 @@ ports: []
 #       env:
 #         - name: REDIS_ARGS
 #           value: "--appendonly yes"
+#       resources:
+#         requests: {cpu: 50m, memory: 64Mi}
+#         limits: {cpu: 500m, memory: 256Mi}
 extraContainers: []
 
 # docker:dind sidecar. The dev container gets DOCKER_HOST pointing at it and

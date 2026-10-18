@@ -348,6 +348,16 @@ cmd_create() {
     exit 1
   fi
 
+  # Report what the deployment actually runs: a values file can add sidecars
+  # that no flag mentioned.
+  local sidecar_names=()
+  local container
+  while IFS= read -r container; do
+    [[ -n "$container" ]] && sidecar_names+=("$container")
+  done < <(kubectl --context "$ctx" get deployment "$ns" -n "$ns" \
+    -o jsonpath='{range .spec.template.spec.containers[*]}{.name}{"\n"}{end}' 2>/dev/null |
+    grep -vxE 'dev-env|docker' || true)
+
   # allocate port
   local port
   port="$(find_free_port "$name")"
@@ -400,9 +410,9 @@ cmd_create() {
 
   if [[ "$JSON_MODE" -eq 1 ]]; then
     local json_containers="" c
-    for c in "${containers[@]}"; do
+    for c in "${sidecar_names[@]}"; do
       [[ -z "$json_containers" ]] || json_containers+=","
-      json_containers+="$(json_str "${c%%=*}")"
+      json_containers+="$(json_str "$c")"
     done
     printf '{"name":%s,"namespace":%s,"context":%s,"ssh_alias":%s,"ssh_port":%s,"url":%s,"containers":[%s],"docker":%s}\n' \
       "$(json_str "$name")" \
@@ -422,6 +432,9 @@ cmd_create() {
   log "  Namespace:   $ns"
   log "  Context:     $ctx"
   log "  Port:        $port"
+  if [[ ${#sidecar_names[@]} -gt 0 ]]; then
+    log "  Sidecars:    ${sidecar_names[*]}"
+  fi
   if [[ -n "$url" ]]; then
     log "  URL:         $url"
   fi
