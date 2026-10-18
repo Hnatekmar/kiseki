@@ -29,6 +29,66 @@ spec:
           operator: Exists
           effect: NoSchedule
 {{- end }}
+{{- $ingress := .Values.ingress | default dict }}
+{{- if $ingress.enabled }}
+{{- if not $ingress.host }}
+{{- fail "ingress.host is required when ingress.enabled is true" }}
+{{- end }}
+{{- $ingressPort := int $ingress.port }}
+{{- if or (lt $ingressPort 1) (gt $ingressPort 65535) }}
+{{- fail "ingress.port must be an integer between 1 and 65535" }}
+{{- end }}
+{{- if eq $ingressPort 22 }}
+{{- fail "ingress.port cannot be 22: that port is the ssh entrypoint" }}
+{{- end }}
+{{- end }}
+{{- $docker := .Values.docker | default dict }}
+{{- range .Values.extraContainers }}
+{{- if has .name (list "dev-env" "docker") }}
+{{- fail (printf "extraContainers: name %q is reserved" .name) }}
+{{- end }}
+{{- if not .image }}
+{{- fail (printf "extraContainers: %q needs an image" (.name | default "<unnamed>")) }}
+{{- end }}
+{{- end }}
+{{- $reservedVolumes := list "provision" "ssh-key" "docker-data" "data" }}
+{{- $volumeNames := list }}
+{{- range .Values.extraVolumes }}
+{{- if has .name $reservedVolumes }}
+{{- fail (printf "extraVolumes: name %q is reserved" .name) }}
+{{- end }}
+{{- if has .name $volumeNames }}
+{{- fail (printf "extraVolumes: duplicate name %q" .name) }}
+{{- end }}
+{{- $volumeNames = append $volumeNames .name }}
+{{- end }}
+{{- range .Values.extraInitContainers }}
+{{- if not .name }}
+{{- fail "extraInitContainers: every entry needs a name" }}
+{{- end }}
+{{- if not .image }}
+{{- fail (printf "extraInitContainers: %q needs an image" .name) }}
+{{- end }}
+{{- end }}
+{{- $waitPorts := list }}
+{{- range .Values.extraContainers }}
+{{- range .ports }}
+{{- if .containerPort }}
+{{- $waitPorts = append $waitPorts (int .containerPort) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- $env := list }}
+{{- if $docker.enabled }}
+{{- $env = append $env (dict "name" "DOCKER_HOST" "value" "tcp://127.0.0.1:2375") }}
+{{- end }}
+{{- if $waitPorts }}
+{{- $env = append $env (dict "name" "DEV_ENV_WAIT_PORTS" "value" (join " " $waitPorts)) }}
+{{- end }}
+{{- with .Values.extraInitContainers }}
+      initContainers:
+        {{- toYaml . | nindent 8 }}
+{{- end }}
       containers:
         - name: dev-env
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -38,6 +98,18 @@ spec:
             - name: ssh
               containerPort: 22
               protocol: TCP
+{{- if $ingress.enabled }}
+            - name: http
+              containerPort: {{ int $ingress.port }}
+              protocol: TCP
+{{- end }}
+{{- with .Values.ports }}
+{{- toYaml . | nindent 12 }}
+{{- end }}
+{{- with $env }}
+          env:
+            {{- toYaml . | nindent 12 }}
+{{- end }}
           {{- $resources := .Values.resources }}
           {{- if $gpu.enabled }}
           {{- $resources = deepCopy ($resources | default dict) }}
@@ -58,10 +130,35 @@ spec:
             - name: ssh-key
               mountPath: /etc/dev-ssh
               readOnly: true
-{{ if .Values.storage.enabled }}
+{{- if .Values.storage.enabled }}
             - name: data
               mountPath: /data
-{{ end }}
+{{- end }}
+{{- with .Values.extraVolumeMounts }}
+{{- toYaml . | nindent 12 }}
+{{- end }}
+{{- with .Values.extraContainers }}
+{{- toYaml . | nindent 8 }}
+{{- end }}
+{{- if $docker.enabled }}
+        - name: docker
+          image: "{{ $docker.image.repository }}:{{ $docker.image.tag }}"
+          imagePullPolicy: {{ $docker.image.pullPolicy | default "IfNotPresent" }}
+          # dind must create namespaces and mount overlayfs; no unprivileged
+          # variant supports docker build inside a pod.
+          securityContext:
+            privileged: true
+          env:
+            # An empty value disables TLS certificate generation, so dockerd
+            # listens on 2375 without client certificates. The socket lives in
+            # the pod's network namespace.
+            - name: DOCKER_TLS_CERTDIR
+              value: ""
+          volumeMounts:
+            - name: docker-data
+              mountPath: /var/lib/docker
+          resources: {}
+{{- end }}
       volumes:
         - name: provision
           configMap:
@@ -70,8 +167,16 @@ spec:
           secret:
             secretName: {{ include "dev-env.fullname" . }}-ssh-key
             defaultMode: 0600
-{{ if .Values.storage.enabled }}
+{{- if .Values.storage.enabled }}
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "dev-env.fullname" . }}
-{{ end }}
+{{- end }}
+{{- if $docker.enabled }}
+        - name: docker-data
+          emptyDir:
+            sizeLimit: {{ ($docker.storage | default dict).sizeLimit | default "20Gi" }}
+{{- end }}
+{{- with .Values.extraVolumes }}
+{{- toYaml . | nindent 8 }}
+{{- end }}

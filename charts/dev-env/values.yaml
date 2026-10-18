@@ -26,3 +26,66 @@ storage:
   size: 1Gi
   storageClass: truenas-nvmeof
 
+# One container port published through an Ingress. The dev container listens on
+# `port`; the chart adds a Service port and an Ingress rule for `host`.
+# TLS is issued by cert-manager, so the cluster needs the named ClusterIssuer.
+ingress:
+  enabled: false
+  className: nginx
+  host: ""
+  port: 3000
+  clusterIssuer: letsencrypt-cloudflare
+  tls: true
+  annotations: {}
+
+# Extra ports declared on the dev container (second server, debugger). Nothing
+# routes to them; they document the surface in the pod spec.
+ports: []
+
+# Extra volumes for sidecars, and mounts for the dev container. A volume is
+# only useful to the dev container if it also appears in extraVolumeMounts;
+# sidecars mount it through their own volumeMounts.
+#   extraVolumes:
+#     - name: pgdata
+#       emptyDir: {}
+#   extraVolumeMounts:
+#     - name: pgdata
+#       mountPath: /var/lib/postgresql   # only if the dev container needs it
+extraVolumes: []
+extraVolumeMounts: []
+
+# Containers that run to completion before the dev container and sidecars
+# start (database seeding, migrations, permission fixes).
+extraInitContainers: []
+
+# Sidecar containers that share the dev pod's network namespace, so the dev
+# container reaches them on 127.0.0.1:<port>. Declaring a port makes the
+# provisioning script wait for it before sshd starts.
+#   extraContainers:
+#     - name: redis
+#       image: redis:7-alpine
+#       ports:
+#         - name: redis
+#           containerPort: 6379
+#       env:
+#         - name: REDIS_ARGS
+#           value: "--appendonly yes"
+#       resources:
+#         requests: {cpu: 50m, memory: 64Mi}
+#         limits: {cpu: 500m, memory: 256Mi}
+extraContainers: []
+
+# docker:dind sidecar. The dev container gets DOCKER_HOST pointing at it and
+# the provisioning script installs the docker CLI. Requires a privileged
+# container, so the namespace needs the privileged Pod Security level:
+# `dev-env create --docker` labels the namespace it creates. A chart installed
+# by hand must set that label first, or the pod is rejected on clusters that
+# enforce baseline.
+docker:
+  enabled: false
+  image:
+    repository: docker
+    tag: "28-dind"
+    pullPolicy: IfNotPresent
+  storage:
+    sizeLimit: 20Gi

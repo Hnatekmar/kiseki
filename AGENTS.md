@@ -92,6 +92,18 @@ The namespace may linger in Terminating state. Force cleanup if needed:
 kubectl delete namespace dev-<name> --force --grace-period=0
 ```
 
+### Pod Never Starts With a PodSecurity Error
+
+A privileged container (the `--docker` dind sidecar) is rejected on clusters that
+enforce the baseline Pod Security standard. The ReplicaSet records
+`violates PodSecurity "baseline:latest"`, while the rollout only shows a timeout.
+`dev-env create --docker` labels the namespace it creates; a hand-installed
+chart needs the label first:
+
+```bash
+kubectl label namespace dev-<name> pod-security.kubernetes.io/enforce=privileged
+```
+
 ### Host-Key Warnings
 
 Host-key warnings on the local forward are expected in v1 because pod keys regenerate on every start. The `StrictHostKeyChecking no` setting handles this.

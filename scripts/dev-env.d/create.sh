@@ -1,5 +1,63 @@
 # dev-env: create subcommand (sourced by dev-env.sh)
 
+# Append one sidecar spec to a YAML fragment.
+# Spec: name=image[:tag][,port=N][,env=KEY=VALUE][,env=KEY2=VALUE2]
+append_sidecar() {
+  local spec="$1" out="$2"
+  local name image rest part port="" envs=()
+
+  name="${spec%%=*}"
+  [[ "$name" != "$spec" ]] || die "--container expects name=image[:tag], got '$spec'"
+  if ! [[ "$name" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+    die "Invalid container name '$name' in --container '$spec'"
+  fi
+
+  rest="${spec#*=}"
+  image="${rest%%,*}"
+  rest="${rest#"$image"}"
+  [[ -n "$image" ]] || die "Invalid --container '$spec': missing image"
+
+  while [[ "$rest" == ,* ]]; do
+    rest="${rest#,}"
+    part="${rest%%,*}"
+    rest="${rest#"$part"}"
+    case "$part" in
+    port=*)
+      port="${part#port=}"
+      [[ "$port" =~ ^[0-9]{1,5}$ ]] || die "Invalid port '$port' in --container '$spec'"
+      port=$((10#$port))
+      ((port >= 1 && port <= 65535)) || die "Port out of range in --container '$spec'"
+      ;;
+    env=*)
+      local kv="${part#env=}"
+      [[ "$kv" == *=* ]] || die "Invalid env '$kv' in --container '$spec' (expected KEY=VALUE)"
+      envs+=("$kv")
+      ;;
+    *)
+      die "Unknown --container option '$part' in '$spec' (supported: port=, env=)"
+      ;;
+    esac
+  done
+
+  {
+    printf '  - name: %s\n' "$name"
+    printf '    image: %s\n' "$(yaml_str "$image")"
+    if [[ -n "$port" ]]; then
+      printf '    ports:\n'
+      printf '      - name: %s\n' "$name"
+      printf '        containerPort: %s\n' "$port"
+    fi
+    if [[ ${#envs[@]} -gt 0 ]]; then
+      printf '    env:\n'
+      local kv
+      for kv in "${envs[@]}"; do
+        printf '      - name: %s\n' "${kv%%=*}"
+        printf '        value: %s\n' "$(yaml_str "${kv#*=}")"
+      done
+    fi
+  } >>"$out"
+}
+
 cmd_create() {
   require_cmd kubectl
   require_cmd helm
@@ -13,6 +71,10 @@ cmd_create() {
   local key=""
   local no_check=0
   local persistence=0
+  local docker=0
+  local address=""
+  local web_port=""
+  local containers=()
   local extra=()
 
   while [[ $# -gt 0 ]]; do
@@ -40,6 +102,26 @@ cmd_create() {
       ctx="$2"
       shift 2
       ;;
+    --address)
+      address="$2"
+      shift 2
+      ;;
+    --port)
+      web_port="$2"
+      shift 2
+      ;;
+    --container)
+      containers+=("$2")
+      shift 2
+      ;;
+    --docker)
+      docker=1
+      shift
+      ;;
+    --json)
+      JSON_MODE=1
+      shift
+      ;;
     --set)
       extra+=(--set "$2")
       shift 2
@@ -66,6 +148,20 @@ cmd_create() {
       ;;
     esac
   done
+
+  # --address names the Ingress host; --port is the container port behind it.
+  if [[ -n "$address" && -z "$web_port" ]] || [[ -z "$address" && -n "$web_port" ]]; then
+    die "--address and --port must be given together"
+  fi
+  if [[ -n "$web_port" ]]; then
+    [[ "$web_port" =~ ^[0-9]{1,5}$ ]] || die "Invalid --port '$web_port'"
+    web_port=$((10#$web_port))
+    ((web_port >= 1 && web_port <= 65535)) || die "--port must be 1-65535"
+    ((web_port != 22)) || die "--port 22 is reserved for ssh"
+    if ! [[ "$address" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]] || [[ "$address" != *.* ]]; then
+      die "Invalid --address '$address': expected a DNS name such as app.dev-k8s.srv.example.com"
+    fi
+  fi
 
   # context
   if [[ -z "$ctx" ]]; then
@@ -101,6 +197,18 @@ cmd_create() {
   fi
   if kubectl --context "$ctx" get ns "$ns" >/dev/null 2>&1; then
     die "Namespace '$ns' already exists on context '$ctx'. Run 'dev-env destroy $name' first"
+  fi
+
+  # sidecar names must be unique inside the pod
+  if [[ ${#containers[@]} -gt 0 ]]; then
+    local seen=" " spec cname
+    for spec in "${containers[@]}"; do
+      cname="${spec%%=*}"
+      if [[ "$seen" == *" $cname "* ]]; then
+        die "Duplicate --container name '$cname'"
+      fi
+      seen+="$cname "
+    done
   fi
 
   # cpu
@@ -146,20 +254,51 @@ cmd_create() {
       read -r num
       num="${num:-1}"
       key="${pub_keys[$((num - 1))]}"
+    elif [[ -f "$HOME/.ssh/id_ed25519.pub" ]]; then
+      # No TTY: prefer the conventional default key rather than whichever path
+      # the glob listed first. A wrong guess surfaces later as "Permission
+      # denied", which reads like a broken environment instead of a bad flag.
+      key="$HOME/.ssh/id_ed25519.pub"
     else
-      key="${pub_keys[0]}"
+      die "Several SSH keys found and no TTY. Pass --ssh-key PATH (found: ${pub_keys[*]})"
     fi
   fi
   [[ -f "$key" ]] || die "SSH key file not found: $key"
 
+  # The chart takes sidecars as a list; build a values file so arbitrary env
+  # values do not need --set escaping.
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  # Expand at exit time, not definition time: tmpdir is a function local, so a
+  # single-quoted trap would reference it after the function returns and fail
+  # under `set -u`.
+  trap 'rm -rf "${tmpdir:-}"' EXIT
+  local sidecars_file="$tmpdir/sidecars.yaml" values_file="$tmpdir/values.yaml"
+  : >"$sidecars_file"
+  local spec
+  for spec in "${containers[@]}"; do
+    append_sidecar "$spec" "$sidecars_file"
+  done
+  if [[ -s "$sidecars_file" ]]; then
+    {
+      printf 'extraContainers:\n'
+      cat "$sidecars_file"
+    } >"$values_file"
+  else
+    : >"$values_file"
+  fi
+
   # summary
-  echo ""
-  echo "Creating environment '$name':"
-  echo "  CPU:    $cpu"
-  echo "  Memory: $memory"
-  [[ "$gpu" -gt 0 ]] && echo "  GPU:    $gpu"
-  echo "  Key:    $key"
-  echo "  Context: $ctx"
+  log ""
+  log "Creating environment '$name':"
+  log "  CPU:     $cpu"
+  log "  Memory:  $memory"
+  [[ "$gpu" -gt 0 ]] && log "  GPU:     $gpu"
+  log "  Key:     $key"
+  log "  Context: $ctx"
+  [[ -n "$address" ]] && log "  Address: https://$address -> :$web_port"
+  [[ ${#containers[@]} -gt 0 ]] && log "  Sidecars: ${containers[*]}"
+  [[ "$docker" -eq 1 ]] && log "  Docker:  dind sidecar"
 
   # helm install
   if [[ "$persistence" -eq 1 ]]; then
@@ -168,26 +307,56 @@ cmd_create() {
   if [[ "$gpu" -gt 0 ]]; then
     extra+=(--set "gpu.enabled=true" --set "gpu.count=$gpu")
   fi
-  helm --kube-context "$ctx" install "$ns" "$CHART_DIR" \
-    -n "$ns" --create-namespace \
+  if [[ -n "$address" ]]; then
+    extra+=(--set "ingress.enabled=true" --set "ingress.host=$address" --set "ingress.port=$web_port")
+  fi
+  if [[ "$docker" -eq 1 ]]; then
+    extra+=(--set "docker.enabled=true")
+  fi
+
+  # The namespace is created here rather than by `helm --create-namespace`: a
+  # dind sidecar needs the privileged Pod Security level, and the label must be
+  # in place before the ReplicaSet tries to create a pod. Clusters that enforce
+  # baseline (the dev cluster does) otherwise reject the pod with a bare
+  # "violates PodSecurity" error that the rollout only reports as a timeout.
+  run_quiet kubectl --context "$ctx" create namespace "$ns"
+  if [[ "$docker" -eq 1 ]]; then
+    log "  PodSecurity: labeling $ns enforce=privileged for the dind sidecar"
+    run_quiet kubectl --context "$ctx" label namespace "$ns" \
+      pod-security.kubernetes.io/enforce=privileged --overwrite
+  fi
+
+  run_quiet helm --kube-context "$ctx" install "$ns" "$CHART_DIR" \
+    -n "$ns" \
     --set "resources.requests.cpu=$cpu" \
     --set "resources.requests.memory=$memory" \
     --set "resources.limits.cpu=$cpu" \
     --set "resources.limits.memory=$memory" \
     --set-file "ssh.authorizedKey=$key" \
+    --values "$values_file" \
     "${extra[@]}"
 
   # wait for pod ready
-  echo "Waiting for pod to become ready..."
-  if ! kubectl --context "$ctx" rollout status "deployment/$ns" -n "$ns" --timeout=20m 2>&1; then
-    echo ""
-    echo "Pod did not become ready. Environment is still running."
-    echo "Debug commands:"
-    echo "  kubectl --context $ctx get pods -n $ns"
-    echo "  kubectl --context $ctx describe pod -l app.kubernetes.io/instance=$ns -n $ns"
-    echo "  kubectl --context $ctx logs -l app.kubernetes.io/instance=$ns -n $ns"
+  log "Waiting for pod to become ready..."
+  if ! run_quiet kubectl --context "$ctx" rollout status "deployment/$ns" -n "$ns" --timeout=20m; then
+    err ""
+    err "Pod did not become ready. Environment is still running."
+    err "Debug commands:"
+    err "  kubectl --context $ctx get pods -n $ns"
+    err "  kubectl --context $ctx describe pod -l app.kubernetes.io/instance=$ns -n $ns"
+    err "  kubectl --context $ctx logs -l app.kubernetes.io/instance=$ns -n $ns"
     exit 1
   fi
+
+  # Report what the deployment actually runs: a values file can add sidecars
+  # that no flag mentioned.
+  local sidecar_names=()
+  local container
+  while IFS= read -r container; do
+    [[ -n "$container" ]] && sidecar_names+=("$container")
+  done < <(kubectl --context "$ctx" get deployment "$ns" -n "$ns" \
+    -o jsonpath='{range .spec.template.spec.containers[*]}{.name}{"\n"}{end}' 2>/dev/null |
+    grep -vxE 'dev-env|docker' || true)
 
   # allocate port
   local port
@@ -197,6 +366,16 @@ cmd_create() {
   mkdir -p "$dir"
   echo "$port" >"$dir/port"
   echo "$ctx" >"$dir/context"
+  # Remember which kubeconfig the context came from, so the proxy helper can
+  # reach it without the caller's environment.
+  if [[ -n "${KUBECONFIG:-}" ]]; then
+    echo "$KUBECONFIG" >"$dir/kubeconfig"
+  fi
+  local url=""
+  if [[ -n "$address" ]]; then
+    url="https://$address"
+    echo "$url" >"$dir/url"
+  fi
 
   # ssh config
   ensure_ssh_config
@@ -220,19 +399,43 @@ cmd_create() {
 
   # connectivity check
   if [[ "$no_check" -eq 0 ]]; then
-    echo "Running SSH connectivity check..."
-    if ! ssh -o BatchMode=yes -o ConnectTimeout=15 "k8s-dev-$name" true; then
-      echo ""
-      echo "Environment '$name' exists but SSH check failed."
-      echo "Debug: ssh -v k8s-dev-$name"
+    log "Running SSH connectivity check..."
+    if ! run_quiet ssh -o BatchMode=yes -o ConnectTimeout=15 "k8s-dev-$name" true; then
+      err ""
+      err "Environment '$name' exists but SSH check failed."
+      err "Debug: ssh -v k8s-dev-$name"
       exit 1
     fi
   fi
 
-  echo ""
-  echo "Environment '$name' is ready!"
-  echo "  SSH alias:   k8s-dev-$name"
-  echo "  Namespace:   $ns"
-  echo "  Context:     $ctx"
-  echo "  Port:        $port"
+  if [[ "$JSON_MODE" -eq 1 ]]; then
+    local json_containers="" c
+    for c in "${sidecar_names[@]}"; do
+      [[ -z "$json_containers" ]] || json_containers+=","
+      json_containers+="$(json_str "$c")"
+    done
+    printf '{"name":%s,"namespace":%s,"context":%s,"ssh_alias":%s,"ssh_port":%s,"url":%s,"containers":[%s],"docker":%s}\n' \
+      "$(json_str "$name")" \
+      "$(json_str "$ns")" \
+      "$(json_str "$ctx")" \
+      "$(json_str "k8s-dev-$name")" \
+      "$port" \
+      "$(json_str "$url")" \
+      "$json_containers" \
+      "$([[ "$docker" -eq 1 ]] && echo true || echo false)"
+    return 0
+  fi
+
+  log ""
+  log "Environment '$name' is ready!"
+  log "  SSH alias:   k8s-dev-$name"
+  log "  Namespace:   $ns"
+  log "  Context:     $ctx"
+  log "  Port:        $port"
+  if [[ ${#sidecar_names[@]} -gt 0 ]]; then
+    log "  Sidecars:    ${sidecar_names[*]}"
+  fi
+  if [[ -n "$url" ]]; then
+    log "  URL:         $url"
+  fi
 }
