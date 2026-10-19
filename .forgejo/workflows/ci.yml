@@ -1,0 +1,140 @@
+# CI for kiseki: what the chart renders, and whether an environment actually
+# comes up, is reachable over SSH, and can be destroyed.
+#
+# Two lanes, because they need different things:
+#   mgmt  no container runtime. Helm rendering and the CLI's own validation.
+#   dind  a docker daemon (tcp://host.docker.internal:2375) so `kind` can create
+#         a real cluster inside the job; the smoke test then runs the same
+#         `just test` a developer runs locally.
+#
+# `just test` is the contract, not a copy of it: the workflow installs the tools
+# and hands `just` a kind config through KIND_CONFIG, so a change to the recipe
+# changes CI too. Nothing here re-implements a check.
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned: a floating kind or helm turns an unrelated refactor into a red build.
+  KIND_VERSION: v0.33.0
+  KUBECTL_VERSION: v1.37.1
+  # Major version 3 on purpose: the chart is helm-3 era, and the local toolchain
+  # is v3. A helm 4 runner would test a toolchain nobody uses.
+  HELM_VERSION: v3.22.1
+  JUST_VERSION: 1.42.4
+
+jobs:
+  lint:
+    runs-on: [self-hosted, mgmt]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install helm and just
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/helm.tgz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          tar -xzf /tmp/helm.tgz -C /tmp
+          install -m0755 /tmp/linux-amd64/helm /usr/local/bin/helm
+          curl -fsSL -o /tmp/just.tgz \
+            "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          tar -xzf /tmp/just.tgz -C /tmp just
+          install -m0755 /tmp/just /usr/local/bin/just
+          helm version --short
+          just --version
+
+      - name: Syntax
+        run: |
+          set -euo pipefail
+          bash -n scripts/*.sh scripts/ci/*.sh scripts/kiseki.d/*.sh
+          echo "bash -n: ok"
+
+      - name: Chart and CLI checks
+        run: just lint
+
+  smoke:
+    runs-on: [self-hosted, dind]
+    timeout-minutes: 30
+    # The runner script injects this: the job container is a sibling of the dind
+    # daemon, so the daemon is reachable at the host gateway, not on localhost.
+    env:
+      DOCKER_HOST: tcp://host.docker.internal:2375
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tooling
+        run: |
+          set -euo pipefail
+          # The job image (node:22-bookworm) ships no docker CLI; kind needs one.
+          if ! command -v docker >/dev/null 2>&1; then
+            apt-get update -qq
+            apt-get install -y -qq docker.io
+          fi
+          apt-get install -y -qq curl ca-certificates openssh-client socat >/dev/null
+          docker version --format 'client={{.Client.Version}} server={{.Server.Version}}'
+
+          curl -fsSL -o /usr/local/bin/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+          chmod +x /usr/local/bin/kind
+          curl -fsSL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          chmod +x /usr/local/bin/kubectl
+          curl -fsSL -o /tmp/helm.tgz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+          tar -xzf /tmp/helm.tgz -C /tmp
+          install -m0755 /tmp/linux-amd64/helm /usr/local/bin/helm
+          curl -fsSL -o /tmp/just.tgz \
+            "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          tar -xzf /tmp/just.tgz -C /tmp just
+          install -m0755 /tmp/just /usr/local/bin/just
+          kind version; kubectl version --client; helm version --short; just --version
+
+      - name: Point kind at the dind daemon
+        run: |
+          set -euo pipefail
+          # kind publishes its API server on the docker host and writes that
+          # address into the kubeconfig. Here the host is the dind daemon's
+          # bridge, not localhost, and the API server certificate has to carry it.
+          ./scripts/ci/kind-config.sh "$RUNNER_TEMP/kind-ci.yaml"
+          echo "KIND_CONFIG=$RUNNER_TEMP/kind-ci.yaml" >>"$GITHUB_ENV"
+          # The node's inherited resolver forwards to this cluster's DNS, which
+          # kind's own service CIDR (10.96.0.0/16) shadows, so pulls fail with
+          # "server misbehaving" until it is pointed elsewhere.
+          echo "KIND_DNS=1.1.1.1" >>"$GITHUB_ENV"
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          # `just test` passes this key to kiseki create; generating it also
+          # exercises the CLI's default-key path.
+          mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
+          ssh-keygen -t ed25519 -N '' -f "$HOME/.ssh/id_ed25519" >/dev/null
+          # No dotfiles bootstrap: it pulls a rust toolchain and does not fit in
+          # the recipe's 1Gi, and this job tests the plumbing, not someone's zsh.
+          KISEKI_TEST_ARGS='--set dots.enabled=false' just test
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          set +e
+          kubectl get nodes -o wide
+          kubectl get pods -A -o wide
+          kubectl get events -A --sort-by=.lastTimestamp | tail -40
+          for ns in $(kubectl get ns -o name | grep kiseki || true); do
+            echo "=== $ns"
+            kubectl -n "${ns#namespace/}" describe pod
+            kubectl -n "${ns#namespace/}" logs -l app.kubernetes.io/instance -c kiseki --tail=80
+          done
+
+      - name: Cleanup
+        if: always()
+        run: |
+          set +e
+          ./scripts/kiseki.sh destroy test -f
+          kind delete cluster --name kiseki-test-cluster

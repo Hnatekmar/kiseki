@@ -1,0 +1,25 @@
+# AI review of pull request diffs, using the reusable workflow in ci-template so
+# this repo carries the caller only. Advisory: a finding never fails the job.
+#
+# The endpoint and model are this lab's Hermes proxy in front of the vLLM fleet;
+# `power-coding` is a proxy alias, so sampling lives in the proxy config rather
+# than here. Point these at another endpoint, or delete the file.
+name: review
+
+on:
+  pull_request:
+
+concurrency:
+  group: review-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    uses: hnatekmar/ci-template/.forgejo/workflows/ai-review.yml@main
+    secrets: inherit
+    with:
+      llm-url: https://proxy.personal-hermes.hnatekmar.dev/v1/chat/completions
+      model: power-coding
+      # A slow local model is a timeout to raise, not a reason to downgrade it.
+      llm-timeout: '7200'
+      task-timeout: '120'

@@ -1,7 +1,11 @@
 set shell := ["bash", "-cu"]
 
+# Syntax first: a broken script fails here in a second, not after a cluster boots
+syntax:
+    bash -n scripts/*.sh scripts/ci/*.sh scripts/kiseki.d/*.sh
+
 # Render checks for CPU, GPU, ingress, sidecars, docker, persistence, and empty resources
-lint:
+lint: syntax
     helm lint charts/kiseki --set ssh.authorizedKey=test
     helm template test charts/kiseki --set ssh.authorizedKey=test >/dev/null
     helm template test charts/kiseki --set ssh.authorizedKey=test --set resources=null >/dev/null
@@ -10,6 +14,12 @@ lint:
     helm template test charts/kiseki --set ssh.authorizedKey=test --set gpu.enabled=true --set resources=null >/dev/null
     helm template test charts/kiseki --set ssh.authorizedKey=test --set gpu.enabled=true --set 'resources.limits.nvidia\.com/gpu=5' | grep -q 'nvidia.com/gpu: 5'
     ! helm template test charts/kiseki --set ssh.authorizedKey=test --set gpu.enabled=true --set gpu.count=0 >/dev/null 2>&1
+    # dotfiles bootstrap is on by default and can be turned off
+    helm template test charts/kiseki --set ssh.authorizedKey=test | grep -q 'name: KISEKI_DOTS_REPO'
+    ! helm template test charts/kiseki --set ssh.authorizedKey=test --set dots.enabled=false | grep -q 'name: KISEKI_DOTS_REPO'
+    # scheduling: the control-plane toleration is on by default, and removable
+    helm template test charts/kiseki --set ssh.authorizedKey=test | grep -q 'node-role.kubernetes.io/control-plane'
+    ! helm template test charts/kiseki --set ssh.authorizedKey=test --set tolerations=null | grep -q 'tolerations:'
     # ingress: host required, ssh port rejected, TLS annotation rendered
     helm template test charts/kiseki --set ssh.authorizedKey=test --set ingress.enabled=true --set ingress.host=app.example.com --set ingress.port=3000 | grep -q 'cert-manager.io/cluster-issuer: letsencrypt-cloudflare'
     ! helm template test charts/kiseki --set ssh.authorizedKey=test --set ingress.enabled=true --set ingress.host=app.example.com --set ingress.tls=false | grep -q 'cert-manager.io/cluster-issuer'
@@ -50,9 +60,12 @@ example:
     ./scripts/kiseki.sh example --output examples/extraSVC.yaml
 
 # Smoke test: fresh kind cluster -> create env -> ssh -> destroy env
+# KISEKI_TEST_ARGS adds create flags, e.g. '--set dots.enabled=false' to skip the
+# dotfiles bootstrap (CI does: the bootstrap needs GitHub and more memory than a
+# one-gigabyte environment has).
 test: lint
     ./scripts/create-cluster.sh
-    ./scripts/kiseki.sh create test --cpu 1 --memory 1Gi --ssh-key "$HOME/.ssh/id_ed25519.pub" --context kind-kiseki-test-cluster
+    ./scripts/kiseki.sh create test --cpu 1 --memory 1Gi --ssh-key "$HOME/.ssh/id_ed25519.pub" --context kind-kiseki-test-cluster ${KISEKI_TEST_ARGS:-}
     ssh -o BatchMode=yes -o ConnectTimeout=15 kiseki-test 'echo smoke-ok'
     ./scripts/kiseki.sh destroy test -f
 
