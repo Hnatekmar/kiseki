@@ -1,6 +1,6 @@
 # Kiseki (奇跡)
 
-> They work — and that's the miracle.
+> Against all odds, they work
 
 <p align="center">
   <picture>
