@@ -219,54 +219,6 @@ just test-gpu  # nvkind cluster -> GPU env -> nvidia-smi check -> destroy
 `gpu.runtimeClassName` must name an existing RuntimeClass on the cluster.
 `docker.enabled` needs a namespace at the privileged Pod Security level.
 
-## Project Structure
-
-```
-.
-├── charts/kiseki/             # Helm chart
-├── assets/                    # Logo (SVG + PNG)
-├── scripts/
-│   ├── kiseki.sh              # Spawn/destroy/list script
-│   ├── kiseki.d/              # Subcommand implementations
-│   ├── install.sh              # Symlink the CLI into a bin directory
-│   ├── create-cluster.sh       # Create kind cluster for tests
-│   └── test-gpu.sh             # GPU smoke test
-├── docs/
-├── Justfile
-├── GLOSSARY.md
-├── README.md
-└── AGENTS.md
-```
-
-## Limitations
-
-- Tested on kind and on the lab dev cluster.
-- `/workdir` and the container filesystem are ephemeral. `/root` persists only with `--persistence`.
-- Existing environments created by the old `dev-env` CLI are not adopted; see [Migrating from dev-envs](#migrating-from-dev-envs).
-- GPU support requires an `nvidia` RuntimeClass and the NVIDIA device plugin. The GPU Operator provides both. `nvkind` provides the RuntimeClass for local kind tests.
-- SSH access is always via port-forward; web access is optional through an Ingress.
-- One Ingress host per environment.
-
-## Migrating from dev-envs
-
-The project was renamed from `dev-envs` to `kiseki`, and the CLI, namespace prefix, and SSH alias changed with it:
-
-| Before | After |
-|---|---|
-| `dev-env create` | `kiseki create` |
-| state in `~/.local/state/dev-env` | `~/.local/state/kiseki` |
-| namespace `dev-<name>` | `kiseki-<name>` |
-| SSH alias `k8s-dev-<name>` | `kiseki-<name>` |
-
-Environments created by the old CLI are not discovered or adopted. Destroy them with a checkout of the last `dev-envs` commit before switching:
-
-```bash
-git clone https://github.com/hnatekmarorg/dev-envs.git /tmp/dev-envs-old
-/tmp/dev-envs-old/scripts/dev-env.sh destroy <name>
-```
-
-Then recreate the environment with `kiseki`. The old `~/.ssh/config.d/k8s-dev-envs` block is inert once its script path disappears; delete the file if you no longer need the aliases.
-
 ## Contributing
 
 See [AGENTS.md](AGENTS.md).
