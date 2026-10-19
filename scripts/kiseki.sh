@@ -52,7 +52,7 @@ Destroy options:
 Examples:
   kiseki create my-env --cpu 2 --memory 4Gi
   kiseki create web --address app.dev-k8s.srv.example.com --port 3000
-  kiseki create api --container redis=redis:7-alpine,port=6379 --container pg=postgres:17
+  kiseki create api --container redis=redis:7-alpine,port=6379 --container pg=postgres:17,env=POSTGRES_PASSWORD=secret
   kiseki example > extraSVC.yaml      # sidecars with volumes and an init container
   kiseki create api -f extraSVC.yaml
   kiseki create build --docker --persistence --set storage.size=20Gi
