@@ -11,7 +11,7 @@
 [![Fedora](https://img.shields.io/badge/Fedora-42-51A2DA?logo=fedora&logoColor=white)](https://fedoraproject.org)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-kind-326CE5?logo=kubernetes&logoColor=white)](https://kind.sigs.k8s.io)
 
-> Disposable Linux development environments on Kubernetes
+> Dev environments that don't need divine intervention
 
 **Kiseki** creates temporary development pods on your Kubernetes cluster. Each pod runs Fedora 42 with SSH access and your dotfiles. When you finish work, you delete the environment completely.
 
