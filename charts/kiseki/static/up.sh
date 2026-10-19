@@ -18,7 +18,7 @@ if [ -n "${DOCKER_HOST:-}" ] && ! command -v docker >/dev/null 2>&1; then
 fi
 
 if [ "$need_install" = 1 ]; then
-  packages=(openssh-server zsh git)
+  packages=(openssh-server zsh git rsync)
   [ -n "${DOCKER_HOST:-}" ] && packages+=(docker-cli)
   dnf5 install -y --setopt=install_weak_deps=0 "${packages[@]}"
   dnf5 clean packages || true
