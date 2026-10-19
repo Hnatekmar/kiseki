@@ -183,14 +183,31 @@ environment_state() {
   # Field separator is US (0x1f), not a tab: bash treats tab as IFS whitespace,
   # which collapses consecutive empty fields, so a pod with no init containers
   # would shift the container statuses into the message field.
-  local sep=$'\x1f' out phase message init containers
-  out="$(kubectl --context "$ctx" get pods -n "$ns" \
+  local sep=$'\x1f' out phase message init containers err="" errfile="${TMPDIR:-/tmp}/kiseki-state.$$"
+  # A failing kubectl call must not be reported as "no pod yet": a deleted
+  # namespace or an unreachable context would otherwise look like a pod that
+  # never gets created, for the whole 20 minute budget.
+  if ! out="$(kubectl --context "$ctx" get pods -n "$ns" \
     -l "app.kubernetes.io/instance=$ns" \
     -o jsonpath='{range .items[*]}{.status.phase}{"\u001f"}{.status.conditions[?(@.type=="PodScheduled")].message}{"\u001f"}{range .status.initContainerStatuses[*]}{.name}={.ready},{.state.waiting.reason} {end}{"\u001f"}{range .status.containerStatuses[*]}{.name}={.ready},{.state.waiting.reason},{.state.running.startedAt} {end}{"\n"}{end}' \
-    2>/dev/null || true)"
+    2>"$errfile")"; then
+    err="$(<"$errfile")"
+    err="${err%%$'\n'*}"
+  fi
+  rm -f "$errfile"
   out="${out%%$'\n'*}"
 
   if [[ -z "$out" ]]; then
+    if [[ -n "$err" ]]; then
+      printf 'cannot read the pod: %s' "$err"
+      return 0
+    fi
+    # kubectl reports a missing namespace as an empty list with exit 0, so the
+    # only way to tell "not created yet" from "deleted underneath us" is to ask.
+    if ! kubectl --context "$ctx" get namespace "$ns" >/dev/null 2>&1; then
+      printf 'namespace %s no longer exists' "$ns"
+      return 0
+    fi
     printf 'waiting for the pod to be created'
     return 0
   fi
