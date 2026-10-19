@@ -78,16 +78,24 @@ if [ -n "${KISEKI_WAIT_PORTS:-}" ]; then
 fi
 
 mkdir -p /workdir
-# Re-running on a restarted pod with persistent storage must not fail on an
-# existing clone, so update in place instead of cloning unconditionally.
-if [ -d /workdir/dots/.git ]; then
-  git -C /workdir/dots pull --ff-only || true
+# The dotfiles checkout is optional (chart value dots.enabled): its installer is
+# the slowest part of a first start and needs more than the pod's memory limits
+# on a small environment. Without it the pod is a plain Fedora shell, which is
+# what the smoke test needs.
+if [ -n "${KISEKI_DOTS_REPO:-}" ]; then
+  # Re-running on a restarted pod with persistent storage must not fail on an
+  # existing clone, so update in place instead of cloning unconditionally.
+  if [ -d /workdir/dots/.git ]; then
+    git -C /workdir/dots pull --ff-only || true
+  else
+    rm -rf /workdir/dots
+    git clone --depth 1 "$KISEKI_DOTS_REPO" /workdir/dots
+  fi
+  cd /workdir/dots
+  bash bootstrap.sh
 else
-  rm -rf /workdir/dots
-  git clone --depth 1 https://github.com/Hnatekmar/dots.git /workdir/dots
+  echo "=== dotfiles bootstrap disabled (dots.enabled=false) ==="
 fi
-cd /workdir/dots
-bash bootstrap.sh
 
 echo "=== provisioning complete, starting sshd ==="
 exec /usr/sbin/sshd -D -e

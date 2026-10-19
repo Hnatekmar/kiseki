@@ -18,16 +18,18 @@ spec:
         {{- include "kiseki.selectorLabels" . | nindent 8 }}
     spec:
 {{- $gpu := .Values.gpu | default dict }}
+{{- $tolerations := .Values.tolerations | default list }}
 {{- if $gpu.enabled }}
 {{- $gpuCount := int $gpu.count }}
 {{- if or (lt $gpuCount 1) (ne (toString $gpuCount) (toString $gpu.count)) }}
 {{- fail "gpu.count must be a positive integer when gpu.enabled is true" }}
 {{- end }}
       runtimeClassName: {{ $gpu.runtimeClassName | default "" }}
+{{- $tolerations = append $tolerations (dict "key" "nvidia.com/gpu" "operator" "Exists" "effect" "NoSchedule") }}
+{{- end }}
+{{- with $tolerations }}
       tolerations:
-        - key: nvidia.com/gpu
-          operator: Exists
-          effect: NoSchedule
+        {{- toYaml . | nindent 8 }}
 {{- end }}
 {{- $ingress := .Values.ingress | default dict }}
 {{- if $ingress.enabled }}
@@ -70,6 +72,7 @@ spec:
 {{- fail (printf "extraInitContainers: %q needs an image" .name) }}
 {{- end }}
 {{- end }}
+{{- $dots := .Values.dots | default dict }}
 {{- $waitPorts := list }}
 {{- range .Values.extraContainers }}
 {{- range .ports }}
@@ -84,6 +87,9 @@ spec:
 {{- end }}
 {{- if $waitPorts }}
 {{- $env = append $env (dict "name" "KISEKI_WAIT_PORTS" "value" (join " " $waitPorts)) }}
+{{- end }}
+{{- if $dots.enabled }}
+{{- $env = append $env (dict "name" "KISEKI_DOTS_REPO" "value" ($dots.repo | default "https://github.com/Hnatekmar/dots.git")) }}
 {{- end }}
 {{- with .Values.extraInitContainers }}
       initContainers:

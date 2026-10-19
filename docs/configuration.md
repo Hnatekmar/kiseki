@@ -15,6 +15,9 @@ have no flag live.
 | `gpu.count` | `1` | |
 | `gpu.runtimeClassName` | `nvidia` | Must name an existing RuntimeClass |
 | `ssh.authorizedKey` | `""` | Use `--set-file` |
+| `dots.enabled` | `true` | Clones `dots.repo` and runs its installer at start; `false` leaves a plain Fedora shell |
+| `dots.repo` | `https://github.com/Hnatekmar/dots.git` | |
+| `tolerations` | control-plane taint | A dev environment may run on a single-node cluster; `--set tolerations=null` drops it |
 | `fullnameOverride` | `""` | Optional resource-name override; defaults to the release name |
 | `storage.enabled` | `false` | |
 | `storage.size` | `10Gi` | |
