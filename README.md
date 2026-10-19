@@ -11,177 +11,169 @@
 [![Fedora](https://img.shields.io/badge/Fedora-42-51A2DA?logo=fedora&logoColor=white)](https://fedoraproject.org)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-kind-326CE5?logo=kubernetes&logoColor=white)](https://kind.sigs.k8s.io)
 
-> Against all odds, they work
+> Disposable Linux development environments on Kubernetes
 
-**kiseki** gives you a disposable Linux dev box on Kubernetes. One command creates a Fedora 42 pod with `zsh`, `openssh-server`, and your dotfiles. You connect with `ssh kiseki-<name>` and drop it when you are done.
-
-Each environment is a Helm release, so sidecars, a docker daemon, a persistent home, GPUs, and one Ingress for web work are flags — not manifests you maintain by hand.
+**Kiseki** creates temporary development pods on your Kubernetes cluster. Each pod runs Fedora 42 with SSH access and your dotfiles. When you finish work, you delete the environment completely.
 
 ---
 
-## Documentation
+## What Kiseki Does
 
-- [Configuration Reference](docs/configuration.md) — chart values, sidecar keys, defaults
-- [Architecture Decisions](docs/adr) — SSH proxying, ingress and sidecars, home persistence
-- [AGENTS.md](AGENTS.md) — repo conventions, troubleshooting
-
----
-
-## Why kiseki?
-
-- **Nothing installed locally** — the toolchain lives in the pod; your machine needs `kubectl` and an SSH client.
-- **Disposable by design** — `destroy` removes the namespace, the claim, and the SSH alias.
-- **Real isolation** — a pod in your cluster, not a container next to your dotfiles.
-- **Batteries included** — redis and postgres sidecars, dind image builds, GPUs, ingress.
-- **Scriptable** — `create` and `list` emit JSON, and flags skip every prompt.
-- **Editor friendly** — works with VS Code Remote-SSH and JetBrains Gateway.
-
----
+Kiseki gives you a clean Linux development environment that:
+- Lives in your Kubernetes cluster, not on your machine
+- Includes SSH access, zsh, and your dotfiles
+- Can have extra services like databases and Docker
+- Deletes completely when you finish
 
 ## Quick Start
 
-Requires `kind`, `kubectl`, `helm`, `just`, `socat`, and an SSH client.
+Install prerequisites, then create your first environment in 2 minutes.
 
-### 1. Install
+### Prerequisites
 
-```bash
-./scripts/install.sh                       # symlink into ~/.local/bin
-./scripts/install.sh --prefix /usr/local   # system-wide
-./scripts/install.sh --uninstall
-```
+You need these tools:
+- `kind` (local Kubernetes)
+- `kubectl` (cluster control)
+- `helm` (package manager)
+- `just` (task runner)
+- `socat` (network tool)
+- SSH client
 
-The symlink points at this checkout, so edits take effect immediately. `just install` does the same. The installer refuses to overwrite a regular file or remove a symlink that points elsewhere.
-
-### 2. Create an environment
-
-```bash
-kiseki create my-env --cpu 4 --memory 8Gi
-```
-
-CPU and memory prompt on a TTY; flags override the prompts. Without `--context`, the current kubectl context is used.
-
-### 3. Connect
+### Step 1: Install Kiseki
 
 ```bash
-ssh kiseki-my-env
+./scripts/install.sh
 ```
 
-### 4. Destroy
+This creates a symlink in `~/.local/bin`. Edits to this checkout work immediately.
+
+### Step 2: Create an environment
 
 ```bash
-kiseki list
-kiseki destroy my-env      # -f skips confirmation
+kiseki create my-dev-env --cpu 4 --memory 8Gi
 ```
+
+The prompt asks for CPU and memory if you omit the flags.
+
+### Step 3: Connect to your environment
+
+```bash
+ssh kiseki-my-dev-env
+```
+
+You are now in a Fedora 42 pod as root with your dotfiles loaded.
+
+### Step 4: Clean up when done
+
+```bash
+kiseki destroy my-dev-env
+```
+
+This removes the pod, storage, and SSH configuration.
 
 ---
 
-## What You Get
+## Common Use Cases
 
-A single `fedora:42` pod running `openssh-server` and `zsh`. You log in as `root`. Startup installs packages with `dnf` and starts `sshd`.
-
-`/root` is ephemeral until you ask for persistence. `/workdir` is always ephemeral: provisioning clones [dots](https://github.com/Hnatekmar/dots) there and runs its bootstrap on every start, so the checkout itself never has to survive.
-
----
-
-## Persistent Home
-
+### Web development with database
 ```bash
-kiseki create work --persistence --persistence-size 20Gi
+kiseki create web-app \
+  --container pg=postgres:17,port=5432,env=POSTGRES_PASSWORD=dev \
+  --address web.dev-k8s.srv.hnatekmar.dev \
+  --port 3000
 ```
 
-Claims a PVC and mounts it at `/root`, so dotfiles, toolchains, caches, and shell history survive a pod restart. The default is 10Gi on the chart's `storage.storageClass` (`truenas-nvmeof`); `--storage-class` picks another. The image, `/workdir`, and the dind image store stay ephemeral.
-
-The Deployment uses the `Recreate` strategy, so a restart detaches the `ReadWriteOnce` volume before the new pod starts:
-
+### Docker builds
 ```bash
-kubectl rollout restart deployment/kiseki-work -n kiseki-work
+kiseki create build-env --docker
 ```
 
-The SSH helper waits for the replacement pod and re-points a stale port-forward, so the next `ssh kiseki-work` reconnects without cleanup.
-
----
-
-## Web Access
-
-```bash
-kiseki create web --address web.dev-k8s.srv.hnatekmar.dev --port 3000
-```
-
-The chart adds a Service port and an Ingress with a cert-manager certificate. Your app must bind `0.0.0.0`, not `127.0.0.1`. The URL is printed at the end and kept for `list`.
-
-This needs an ingress controller, the named ClusterIssuer (`ingress.clusterIssuer`, default `letsencrypt-cloudflare`), and a DNS record. Without them the Ingress stays unserved and the environment still works over SSH.
-
----
-
-## Sidecars
-
-Extra containers share the pod's network namespace:
-
-```bash
-kiseki create api \
-  --container redis=redis:7-alpine,port=6379 \
-  --container pg=postgres:17,port=5432,env=POSTGRES_PASSWORD=dev
-```
-
-`--container` takes `name=IMAGE[:TAG][,port=N][,env=KEY=VALUE]` and repeats. The dev container reaches each one on `127.0.0.1:<port>`, and provisioning waits for every declared port before starting `sshd`, so nothing races at startup.
-
-Anything richer — volumes, init containers, commands, limits, probes — goes in a values file. Generate it instead of remembering the shape:
-
-```bash
-kiseki example                      # print to stdout
-kiseki example --output extraSVC.yaml
-kiseki create api -f extraSVC.yaml --address api.dev-k8s.srv.hnatekmar.dev --port 8080
-```
-
-[`examples/extraSVC.yaml`](examples/extraSVC.yaml) is that file, committed and kept in sync by `just lint`.
-
----
-
-## Docker Builds
-
-```bash
-kiseki create build --docker
-```
-
-Adds a `docker:dind` sidecar and points `DOCKER_HOST` at it, so `docker build` and `docker run` work from the first shell. The daemon is privileged, so the CLI labels the namespace it creates with `pod-security.kubernetes.io/enforce=privileged`. Clusters that forbid privileged containers cannot use this flag.
-
----
-
-## GPU
-
+### GPU development
 ```bash
 kiseki create gpu-env --gpu 1
 ```
 
-The cluster needs an `nvidia` RuntimeClass and the NVIDIA device plugin; the GPU Operator provides both. For a local kind test, `just test-gpu` uses `nvkind` and installs the device plugin.
+### Persistent home directory
+```bash
+kiseki create work --persistence --persistence-size 20Gi
+```
 
 ---
 
-## How SSH Works
+## What You Get Inside
 
-Each environment gets an alias in `~/.ssh/config.d/kiseki`, included from `~/.ssh/config` on first use. The alias runs `ProxyCommand kiseki proxy <alias>`, which starts a `kubectl port-forward` (port 2200-2299) and bridges it with `socat`.
+Each environment includes:
+- **Fedora 42** base system
+- **zsh** shell with your dotfiles from `/workdir`
+- **SSH server** for remote access
+- **Package manager** (`dnf`) for installing software
+- **Root access** to install what you need
 
-Host-key checking is disabled (`StrictHostKeyChecking no`, `UserKnownHostsFile /dev/null`) because pod keys regenerate on every start. The Kubernetes API channel is the trust boundary.
+The `/workdir` folder always starts fresh. Your home directory (`/root`) is temporary unless you request persistence.
 
 ---
 
-## Scripting
+## Adding Services
 
-`create` and `list` take `--json`. Progress goes to stderr, so stdout is one JSON document:
+Sidecars run in the same pod network. Connect to them on localhost:
 
 ```bash
+# Redis and PostgreSQL
+kiseki create api \
+  --container redis=redis:7-alpine,port=6379 \
+  --container pg=postgres:17,port=5432,env=POSTGRES_PASSWORD=dev
+
+# Inside the pod, connect to:
+# Redis: localhost:6379
+# PostgreSQL: localhost:5432
+```
+
+For complex setups, generate a values file:
+```bash
+kiseki example > my-env.yaml
+kiseki create api -f my-env.yaml
+```
+
+---
+
+## Scripting and Automation
+
+Use JSON output for automation:
+
+```bash
+# Create and get SSH alias
 kiseki create ci-1 --cpu 2 --memory 4Gi --no-check --json | jq -r .ssh_alias
+
+# List all environments
 kiseki list --json | jq -r '.[] | "\(.name) \(.phase)"'
 ```
 
 ---
 
-## Development
+## How SSH Access Works
+
+Kiseki adds SSH aliases to `~/.ssh/config.d/kiseki`. Each alias runs a proxy command that:
+1. Starts a `kubectl port-forward` to your pod
+2. Bridges the connection with `socat`
+
+Host key checking is disabled because pod keys regenerate on restart.
+
+---
+
+## Development and Testing
 
 ```bash
-just lint      # render checks for CPU, GPU, ingress, sidecars, docker, empty resources
-just test      # kind cluster -> create env -> ssh check -> destroy
-just test-gpu  # nvkind cluster -> GPU env -> nvidia-smi check -> destroy
+just lint      # Check chart rendering
+just test      # Full smoke test on kind cluster
+just test-gpu  # GPU test with nvkind
 ```
 
-`just test` recreates the kind cluster `kiseki-test-cluster` (deleting it first), so any other environments on it go away too.
+`just test` creates a fresh kind cluster, tests the complete workflow, then cleans up.
+
+---
+
+## Documentation
+
+- [Configuration Reference](docs/configuration.md) — all chart values and options
+- [Architecture Decisions](docs/adr) — technical design decisions
+- [AGENTS.md](AGENTS.md) — development guidelines and troubleshooting
