@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	_ "embed"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -19,20 +20,29 @@ import (
 //go:embed example.yaml
 var exampleYAML string
 
+type exampleOptions struct {
+	output string
+}
+
+func (o *exampleOptions) register(fs *flag.FlagSet) {
+	fs.StringVar(&o.output, "output", "", "write the example to FILE instead of stdout")
+	fs.StringVar(&o.output, "o", "", "shorthand for --output")
+}
+
 func runExample(args []string, out, errw io.Writer) int {
+	var opts exampleOptions
 	fs := newFlagSet("example", "[--output FILE]", errw)
-	path := fs.String("output", "", "write the example to FILE instead of stdout")
-	fs.StringVar(path, "o", "", "shorthand for --output")
+	opts.register(fs)
 	if code, ok := parseFlags(fs, args, errw); !ok {
 		return code
 	}
 
-	if *path == "" {
+	if opts.output == "" {
 		fmt.Fprint(out, exampleYAML)
 		return 0
 	}
 
-	dir := filepath.Dir(*path)
+	dir := filepath.Dir(opts.output)
 	if dir == "" {
 		dir = "."
 	}
@@ -74,13 +84,13 @@ func runExample(args []string, out, errw io.Writer) int {
 		return code
 	}
 
-	if err := os.Rename(tmp.Name(), *path); err != nil {
+	if err := os.Rename(tmp.Name(), opts.output); err != nil {
 		fmt.Fprintf(errw, "kiseki: %v\n", err)
 		return 1
 	}
 
-	fmt.Fprintf(out, "Wrote %s\n", *path)
-	fmt.Fprintf(out, "Use it with: kiseki create <name> -f %s\n", *path)
+	fmt.Fprintf(out, "Wrote %s\n", opts.output)
+	fmt.Fprintf(out, "Use it with: kiseki create <name> -f %s\n", opts.output)
 	return 0
 }
 

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"strings"
@@ -26,9 +27,18 @@ type envJSON struct {
 	URL       string `json:"url"`
 }
 
+type listOptions struct {
+	json bool
+}
+
+func (o *listOptions) register(fs *flag.FlagSet) {
+	fs.BoolVar(&o.json, "json", false, "print one JSON array on stdout")
+}
+
 func runList(args []string, out, errw io.Writer) int {
+	var opts listOptions
 	fs := newFlagSet("list", "[--json]", errw)
-	jsonMode := fs.Bool("json", false, "print one JSON array on stdout")
+	opts.register(fs)
 	if code, ok := parseFlags(fs, args, errw); !ok {
 		return code
 	}
@@ -40,7 +50,7 @@ func runList(args []string, out, errw io.Writer) int {
 	}
 
 	if len(envs) == 0 {
-		if *jsonMode {
+		if opts.json {
 			fmt.Fprintln(out, "[]")
 		} else {
 			fmt.Fprintln(out, "No environments found.")
@@ -89,7 +99,7 @@ func runList(args []string, out, errw io.Writer) int {
 		}
 	}
 
-	if *jsonMode {
+	if opts.json {
 		return printJSON(out, errw, rows)
 	}
 
