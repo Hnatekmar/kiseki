@@ -1,0 +1,131 @@
+# CI for kiseki: what the chart renders, and whether an environment actually
+# comes up, is reachable over SSH, and can be destroyed.
+#
+# Two lanes, because they need different things:
+#   mgmt  no container runtime. Helm rendering and the CLI's own validation.
+#   dind  a docker daemon (tcp://host.docker.internal:2375) so `kind` can create
+#         a real cluster inside the job; the smoke test then runs the same
+#         `just test` a developer runs locally.
+#
+# `just test` is the contract, not a copy of it: the workflow installs the tools
+# and hands `just` a kind config through KIND_CONFIG, so a change to the recipe
+# changes CI too. Nothing here re-implements a check.
+#
+# Runners are persistent and self-hosted, so a pull request never executes code
+# on them from a fork: the guard below fails closed when the repository field is
+# absent, and `.forgejo/workflows/**` is a protected path on main.
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+# Forgejo 15 ignores this, but it documents the scope the workflow expects and
+# keeps the intent explicit if that changes.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: [self-hosted, mgmt]
+    timeout-minutes: 15
+    # The CLI's validation assertions are only meaningful when kubectl, helm and
+    # ssh exist: cmd_create checks for them before it parses a single flag, so
+    # without them a bad flag "fails" for the wrong reason and the check is a
+    # no-op. They are installed below, and the assertions now match the message.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tooling
+        run: |
+          set -euo pipefail
+          apt-get update -qq
+          apt-get install -y -qq curl ca-certificates openssh-client >/dev/null
+          ./scripts/ci/install-tools.sh
+
+      - name: Chart and CLI checks
+        run: just lint
+
+  smoke:
+    runs-on: [self-hosted, dind]
+    timeout-minutes: 30
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # The runner script injects this: the job container is a sibling of the dind
+    # daemon, so the daemon is reachable at the host gateway, not on localhost.
+    env:
+      DOCKER_HOST: tcp://host.docker.internal:2375
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tooling
+        run: |
+          set -euo pipefail
+          # The job image (node:22-bookworm) ships no docker CLI; kind needs one.
+          # The update is hoisted out of the branch: the apt lists of a reused
+          # image may be stale or empty even when docker is already present.
+          apt-get update -qq
+          if ! command -v docker >/dev/null 2>&1; then
+            apt-get install -y -qq docker.io
+          fi
+          # iproute2 for `ss`, which the ssh proxy uses to decide whether the
+          # port-forward is already up; without it every `ssh kiseki-*` tears
+          # down and rebuilds the forward.
+          apt-get install -y -qq curl ca-certificates openssh-client socat iproute2 >/dev/null
+          docker version --format 'client={{.Client.Version}} server={{.Server.Version}}'
+          ./scripts/ci/install-tools.sh --docker
+
+      - name: Point kind at the dind daemon
+        run: |
+          set -euo pipefail
+          # kind publishes its API server on the docker host and writes that
+          # address into the kubeconfig. Here the host is the dind daemon's
+          # bridge, not localhost, and the API server certificate has to carry it.
+          ./scripts/ci/kind-config.sh "$RUNNER_TEMP/kind-ci.yaml"
+          echo "KIND_CONFIG=$RUNNER_TEMP/kind-ci.yaml" >>"$GITHUB_ENV"
+          # The node's inherited resolver forwards to this cluster's DNS, which
+          # kind's own service CIDR (10.96.0.0/16) shadows, so pulls fail with
+          # "server misbehaving" until it is pointed elsewhere.
+          echo "KIND_DNS=1.1.1.1" >>"$GITHUB_ENV"
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          # `just test` passes this key to kiseki create; generating it also
+          # exercises the CLI's default-key path. A persisted HOME would make
+          # ssh-keygen refuse to overwrite, so the stale pair goes first.
+          mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
+          rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_ed25519.pub"
+          ssh-keygen -q -t ed25519 -N '' -f "$HOME/.ssh/id_ed25519"
+          # No dotfiles bootstrap: it pulls a rust toolchain and does not fit in
+          # the recipe's 1Gi, and this job tests the plumbing, not someone's zsh.
+          KISEKI_TEST_ARGS='--set dots.enabled=false' just test
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          set +e
+          kubectl get nodes -o wide
+          kubectl get pods -A -o wide
+          kubectl get events -A --sort-by=.lastTimestamp | tail -40
+          for ns in $(kubectl get ns -o name | grep kiseki || true); do
+            echo "=== $ns"
+            kubectl -n "${ns#namespace/}" describe pods -l app.kubernetes.io/instance
+            kubectl -n "${ns#namespace/}" logs -l app.kubernetes.io/instance -c kiseki --tail=80
+          done
+
+      - name: Cleanup
+        if: always()
+        run: |
+          set +e
+          ./scripts/kiseki.sh destroy test -f
+          # The cluster name lives in create-cluster.sh; asking it to delete
+          # keeps the second copy (which would silently leak) out of this file.
+          ./scripts/create-cluster.sh --delete

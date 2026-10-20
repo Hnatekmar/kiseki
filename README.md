@@ -53,7 +53,9 @@ This creates a symlink in `~/.local/bin`. Edits to this checkout work immediatel
 kiseki create my-dev-env --cpu 4 --memory 8Gi
 ```
 
-The prompt asks for CPU and memory if you omit the flags.
+The prompt asks for CPU and memory if you omit the flags. While the pod starts, the
+command shows what it is doing — image pull, package install, dotfiles clone — instead
+of waiting silently, then runs the SSH check.
 
 ### Step 3: Connect to your environment
 
@@ -163,12 +165,22 @@ Host key checking is disabled because pod keys regenerate on restart.
 ## Development and Testing
 
 ```bash
-just lint      # Check chart rendering
+just syntax    # bash -n over every script
+just lint      # chart rendering and CLI validation
 just test      # Full smoke test on kind cluster
 just test-gpu  # GPU test with nvkind
 ```
 
 `just test` creates a fresh kind cluster, tests the complete workflow, then cleans up.
+
+CI runs the same recipes on Forgejo Actions: `just lint` on the `mgmt` runner, and
+`just test` on the `dind` runner. That runner's docker daemon is not on localhost, so
+`scripts/ci/kind-config.sh` writes a kind config whose API server address is the
+daemon's bridge and exports it as `KIND_CONFIG`; `create-cluster.sh` passes it through.
+It also exports `KIND_DNS=1.1.1.1`, because the node inherits a resolver that lives
+inside kind's own service CIDR and cannot answer from inside the cluster.
+`create-cluster.sh --delete` removes the test cluster (CI cleanup uses it).
+Pull requests also get an advisory AI review through `hnatekmar/ci-template`.
 
 ---
 

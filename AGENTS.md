@@ -59,6 +59,13 @@ just test
 
 This recipe recreates the kind cluster, creates an environment non-interactively, runs an SSH smoke check, then destroys the environment. Prerequisites are listed in README.md.
 
+CI (`.forgejo/workflows/ci.yml`) runs `just lint` on the `mgmt` runner and `just test`
+on the `dind` runner. The dind lane needs one thing from the caller: `KIND_CONFIG`
+pointing at a kind config, because that docker daemon is not on localhost and the
+default kubeconfig would name an unreachable 127.0.0.1. `scripts/ci/kind-config.sh`
+generates that file from the container's own default gateway. Keep the recipe as the
+only list of checks — the workflow must not grow a parallel copy of them.
+
 ### GPU Smoke Test
 
 ```bash

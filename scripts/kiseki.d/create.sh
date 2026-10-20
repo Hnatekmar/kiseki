@@ -350,6 +350,7 @@ cmd_create() {
   # baseline (the dev cluster does) otherwise reject the pod with a bare
   # "violates PodSecurity" error that the rollout only reports as a timeout.
   run_quiet kubectl --context "$ctx" create namespace "$ns"
+  log "  ✓ namespace $ns"
   if [[ "$docker" -eq 1 ]]; then
     log "  PodSecurity: labeling $ns enforce=privileged for the dind sidecar"
     run_quiet kubectl --context "$ctx" label namespace "$ns" \
@@ -365,10 +366,11 @@ cmd_create() {
     --set-file "ssh.authorizedKey=$key" \
     --values "$values_file" \
     "${extra[@]}"
+  log "  ✓ release installed"
 
   # wait for pod ready
-  log "Waiting for pod to become ready..."
-  if ! run_quiet kubectl --context "$ctx" rollout status "deployment/$ns" -n "$ns" --timeout=20m; then
+  log "Waiting for the pod (first start installs packages and clones dotfiles)..."
+  if ! wait_for_environment "$ctx" "$ns" 1200; then
     err ""
     err "Pod did not become ready. Environment is still running."
     err "Debug commands:"
@@ -430,7 +432,18 @@ cmd_create() {
   # connectivity check
   if [[ "$no_check" -eq 0 ]]; then
     log "Running SSH connectivity check..."
-    if ! run_quiet ssh -o BatchMode=yes -o ConnectTimeout=15 "kiseki-$name" true; then
+    # Authenticate with the private half of the key the pod was given: without
+    # this, a --ssh-key that is not the caller's default identity makes a
+    # working environment look broken ("Permission denied (publickey)").
+    # Only a path that is a .pub with a sibling private key is usable as -i;
+    # anything else has to fall back to the agent/default identities, and says so.
+    local identity=()
+    if [[ "$key" == *.pub && -f "${key%.pub}" ]]; then
+      identity=(-i "${key%.pub}")
+    else
+      log "  Note: no private key next to $key; using the default SSH identities"
+    fi
+    if ! run_quiet ssh -o BatchMode=yes -o ConnectTimeout=15 "${identity[@]}" "kiseki-$name" true; then
       err ""
       err "Environment '$name' exists but SSH check failed."
       err "Debug: ssh -v kiseki-$name"

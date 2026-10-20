@@ -11,6 +11,23 @@ resources:
     cpu: "4"
     memory: 8Gi
 
+# Tolerations for the environment pod. The default admits the control-plane taint
+# that kubeadm applies on single-node clusters (kind, k3s, a lab box): a dev
+# environment has no reason to stay off the only node. An environment created with
+# --gpu also gets a toleration for nvidia.com/gpu.
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+    effect: NoSchedule
+
+# The dotfiles bootstrap clones a repository and runs its installer at container
+# start. It is the slowest part of a first start and needs GitHub plus whatever
+# the installer pulls, so it is skippable: an environment that only needs a
+# shell, and the CI smoke test, can turn it off.
+dots:
+  enabled: true
+  repo: https://github.com/Hnatekmar/dots.git
+
 gpu:
   enabled: false
   count: 1
