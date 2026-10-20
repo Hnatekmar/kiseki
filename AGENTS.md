@@ -10,7 +10,7 @@ This repository provides Kubernetes-based development environments using a Helm 
 
 - **Orchestration**: Kubernetes / kind
 - **Packaging**: Helm
-- **Provisioning**: Bash
+- **Provisioning**: Bash (in-cluster `up.sh`) and Go (the CLI, see ADR 0004)
 - **Task Runner**: Just
 - **Base Image**: fedora:42
 
@@ -20,6 +20,20 @@ This repository provides Kubernetes-based development environments using a Helm 
 - Use conventional commits (feat, fix, refactor, chore, etc.)
 - Keep subject line under 72 characters.
 - Do not use emoji prefixes.
+
+### Go CLI
+- Code lives in `cmd/kiseki` and `internal/`; `internal/cli` owns the command
+  surface, `internal/kube` owns the `kubectl` child process, `internal/state`
+  owns the state directory, `internal/repo` locates the checkout.
+- `go vet ./...` and `go test ./...` must pass (`just test-go`).
+- Dependencies stay minimal: standard library plus `yaml.v3` for chart values.
+  A new dependency needs a reason in the commit message, not a convenience.
+- Cluster access goes through `kubectl` and `helm` as child processes, not
+  `client-go`: keep it that way unless an ADR says otherwise.
+- Anything that shells out must be tested through a fake on `PATH` (see
+  `internal/kube/kube_test.go`), so the suite needs no cluster.
+- `examples/extraSVC.yaml` is generated. A test diffs the generator against it;
+  change both in the same commit.
 
 ### File Structure
 - Chart lives in `charts/kiseki/`

@@ -9,6 +9,17 @@ syntax:
     done
     @echo "bash -n: ok"
 
+# The Go CLI, built next to the source it replaces. build/ is gitignored; the
+# installed `kiseki` is still the Bash one until the port reaches install.sh.
+build:
+    go build -o build/kiseki ./cmd/kiseki
+
+# Fast checks for the Go CLI: the golden example, list output, and kubectl
+# parsing. No cluster needed: every cluster-facing call goes through a fake.
+test-go:
+    go vet ./...
+    go test ./...
+
 # Render checks for CPU, GPU, ingress, sidecars, docker, persistence, and empty resources
 lint: syntax
     helm lint charts/kiseki --set ssh.authorizedKey=test

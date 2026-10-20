@@ -54,6 +54,13 @@ jobs:
       - name: Chart and CLI checks
         run: just lint
 
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Go CLI checks
+        run: just test-go
+
   smoke:
     runs-on: [self-hosted, dind]
     timeout-minutes: 30
