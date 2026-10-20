@@ -16,29 +16,40 @@ import (
 
 const chartRel = "charts/kiseki"
 
-// Root is the checkout directory that holds the chart.
+// Root is the directory that holds the chart. The two sources are trusted
+// differently: the directory of the executable belongs to whoever installed it,
+// so a chart sitting next to it is enough — that is exactly the layout of a
+// released tarball. A directory found by walking up from the working directory is
+// not trusted that way, so it must also carry a checkout marker.
 func Root() (string, error) {
-	var starts []string
 	if dir := exeDir(); dir != "" {
-		starts = append(starts, dir)
+		if root := walkUp(dir, isChartDir); root != "" {
+			return root, nil
+		}
 	}
 	if wd, err := os.Getwd(); err == nil {
-		starts = append(starts, wd)
-	}
-
-	for _, start := range starts {
-		for dir := start; ; {
-			if isCheckout(dir) {
-				return dir, nil
-			}
-			parent := filepath.Dir(dir)
-			if parent == dir {
-				break
-			}
-			dir = parent
+		if root := walkUp(wd, isCheckout); root != "" {
+			return root, nil
 		}
 	}
 	return "", fmt.Errorf("cannot find %s above the executable or the working directory (set KISEKI_CHART)", chartRel)
+}
+
+func walkUp(start string, accept func(string) bool) string {
+	for dir := start; ; {
+		if accept(dir) {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+func isChartDir(dir string) bool {
+	return isChart(filepath.Join(dir, chartRel))
 }
 
 // ChartDir is the Helm chart the CLI installs.
@@ -64,11 +75,17 @@ func ChartDir() (string, error) {
 
 // LegacyScript is the Bash CLI, used by subcommands the port has not reached
 // yet. It disappears with the last of them. It does not imply IsExecutable:
-// delegate falls back to `bash path` when the mode bits are missing.
+// delegate falls back to `bash path` when the mode bits are missing. It does
+// require a checkout, though — an installed tarball ships the chart but not the
+// script, and running a scripts/kiseki.sh of unknown provenance is exactly what
+// the marker check exists to prevent.
 func LegacyScript() (string, error) {
 	root, err := checkout()
 	if err != nil {
 		return "", err
+	}
+	if !isCheckout(root) {
+		return "", fmt.Errorf("%s has a chart but is not a kiseki checkout", root)
 	}
 	path := filepath.Join(root, "scripts", "kiseki.sh")
 	st, err := os.Stat(path)

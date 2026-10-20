@@ -61,3 +61,19 @@ func TestRunHelp(t *testing.T) {
 		}
 	}
 }
+
+// A release artifact must be able to say what it is.
+func TestVersionCommand(t *testing.T) {
+	originalVersion, originalCommit, originalDate := Version, Commit, Date
+	t.Cleanup(func() { Version, Commit, Date = originalVersion, originalCommit, originalDate })
+	Version, Commit, Date = "v1.2.3", "abc1234", "2026-10-20"
+
+	var out, errw bytes.Buffer
+	if code := Run([]string{"version"}, &out, &errw, strings.NewReader("")); code != 0 {
+		t.Fatalf("version exited %d: %s", code, errw.String())
+	}
+	want := "kiseki v1.2.3 (commit abc1234, built 2026-10-20)\n"
+	if out.String() != want {
+		t.Fatalf("got %q, want %q", out.String(), want)
+	}
+}

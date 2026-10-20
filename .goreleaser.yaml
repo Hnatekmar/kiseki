@@ -1,0 +1,69 @@
+# Release artifacts for the Go CLI.
+#
+# The chart travels with the binary on purpose: `kiseki example --output` renders
+# the sample against the real chart, and `create` will install it. A tarball that
+# unpacked to a lone binary would fail at the first command that needs the chart.
+# Chart resolution trusts the executable's own directory for exactly this layout
+# (see internal/repo).
+version: 2
+
+project_name: kiseki
+
+builds:
+  - id: kiseki
+    main: ./cmd/kiseki
+    binary: kiseki
+    env:
+      # No cgo anywhere: the binary must run on a clean host and cross-compile
+      # without a toolchain per target.
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .Commit }}
+      - -X main.date={{ .Date }}
+
+archives:
+  - id: kiseki
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - examples/extraSVC.yaml
+      # The whole chart, at the path the resolver looks for.
+      - src: charts/kiseki/**
+        dst: charts/kiseki
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+
+# Forgejo serves the Gitea-compatible API, so the gitea flavour works; the URLs
+# are explicit because the git remote is an SSH alias, not a host goreleaser can
+# derive an API endpoint from.
+release:
+  gitea:
+    owner: hnatekmar
+    name: kiseki
+
+gitea_urls:
+  api: https://forgejo.srv.hnatekmar.dev/api/v1
+  download: https://forgejo.srv.hnatekmar.dev
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"

@@ -42,6 +42,19 @@ This repository provides Kubernetes-based development environments using a Helm 
   embedded. A test diffs the generator against the committed example; change both
   in the same commit.
 
+### Releases
+- Pushing a `v*` tag runs `.forgejo/workflows/release.yml`; nothing else publishes.
+- `.goreleaser.yaml` puts `charts/kiseki/**` in every archive, so a released
+  binary can render its own example. Keep `repo.Root()`'s executable-relative
+  resolution working for that layout (binary beside `charts/`); a change there
+  breaks downloads, not just tests.
+- `just release-check` validates the config, `just release-snapshot` builds the
+  archives locally without publishing, and both need goreleaser.
+- Version strings come from `-X main.version`/`main.commit`/`main.date` via
+  goreleaser and are printed by `kiseki version`. Never hand-edit them.
+- An installed tarball has no `scripts/`, so delegated commands report that
+  instead of running: that is intentional until the port finishes.
+
 ### File Structure
 - Chart lives in `charts/kiseki/`
 - Scripts live in `scripts/`

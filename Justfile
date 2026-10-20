@@ -15,6 +15,15 @@ build:
     @mkdir -p build
     go build -o build/kiseki ./cmd/kiseki
 
+# Build the release artifacts without publishing. Needs goreleaser; the tarball
+# carries the chart, so an unpacked archive can render its own example.
+release-snapshot:
+    TMPDIR=${TMPDIR:-/tmp} goreleaser release --snapshot --clean --skip=publish
+
+# Validate .goreleaser.yaml without building anything.
+release-check:
+    goreleaser check
+
 # Fast checks for the Go CLI: the golden example, list output, and kubectl
 # parsing. No cluster needed: every cluster-facing call goes through a fake.
 test-go:

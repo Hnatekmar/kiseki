@@ -27,20 +27,26 @@ JUST_SHA256=678efc1cfbd5fa5a88375daa7e2f3864a049d6d63a0296df925a2ae5f516cb56
 # silently gets a newer Go is a runner nobody has tested.
 GO_VERSION=go1.26.10
 GO_SHA256=ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5
+# goreleaser builds and publishes the release artifacts. Pinned and checked like
+# everything else that runs on a runner.
+GORELEASER_VERSION=v2.18.3
+GORELEASER_SHA256=b8dee4728bca1aba0d71a832a17cd0a3799f75372878e7ffa36aef2343bce0bc
 
 with_docker=0
 with_go=0
+with_goreleaser=0
 bindir=/usr/local/bin
 while [[ $# -gt 0 ]]; do
   case "$1" in
   --docker) with_docker=1 ;;
   --go) with_go=1 ;;
+  --goreleaser) with_goreleaser=1 ;;
   --bindir)
     bindir="${2:?--bindir needs a directory}"
     shift
     ;;
   *)
-    echo "usage: $0 [--docker] [--go] [--bindir DIR]" >&2
+    echo "usage: $0 [--docker] [--go] [--goreleaser] [--bindir DIR]" >&2
     exit 1
     ;;
   esac
@@ -109,6 +115,13 @@ if [[ "$with_go" -eq 1 ]]; then
   ln -sfn "$go_root/bin/gofmt" "$bindir/gofmt"
 fi
 
+if [[ "$with_goreleaser" -eq 1 ]]; then
+  fetch_verified "https://github.com/goreleaser/goreleaser/releases/download/${GORELEASER_VERSION}/goreleaser_Linux_x86_64.tar.gz" \
+    "$work/goreleaser.tgz" "$GORELEASER_SHA256"
+  tar -xzf "$work/goreleaser.tgz" -C "$work" goreleaser
+  install -m0755 "$work/goreleaser" "$bindir/goreleaser"
+fi
+
 # Absolute paths: the point of the log line is what was installed, not whatever
 # happens to be first on PATH.
 "$bindir/just" --version
@@ -116,4 +129,7 @@ fi
 "$bindir/helm" version --short
 if [[ "$with_go" -eq 1 ]]; then
   "$bindir/go" version
+fi
+if [[ "$with_goreleaser" -eq 1 ]]; then
+  "$bindir/goreleaser" --version
 fi

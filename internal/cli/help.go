@@ -23,6 +23,7 @@ var cliCommands = []cliCommand{
 	{name: "destroy", summary: "Destroy an environment", usage: "<name> [-f]", flags: (&destroyOptions{}).register},
 	{name: "example", summary: "Print the sidecar values example, or write it", usage: "[--output FILE]", flags: (&exampleOptions{}).register},
 	{name: "proxy", summary: "Proxy SSH traffic (internal)", usage: "<alias>"},
+	{name: "version", summary: "Print the version"},
 	{name: "help", summary: "Show this help message"},
 }
 

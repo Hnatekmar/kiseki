@@ -25,6 +25,8 @@ func Run(args []string, out, errw io.Writer, in io.Reader) int {
 		return runExample(args, out, errw)
 	case "list":
 		return runList(args, out, errw)
+	case "version":
+		return runVersion(out)
 	case "help", "-h", "--help":
 		printHelp(out)
 		return 0
