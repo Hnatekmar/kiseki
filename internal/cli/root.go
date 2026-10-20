@@ -110,6 +110,12 @@ func delegate(sub string, args []string, out, errw io.Writer, in io.Reader) int 
 	}
 	cmd := exec.Command(prog, argv...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, out, errw
+	if sub == "proxy" {
+		// The delegated proxy is an SSH transport: socat writes the session to
+		// stdout byte for byte, so it must reach the real descriptor rather than
+		// a writer a caller supplied.
+		cmd.Stdin, cmd.Stdout = os.Stdin, os.Stdout
+	}
 	// The caller's environment is inherited on purpose: this is argv-preserving
 	// delegation, so `kiseki create` must see the same KUBECONFIG, PATH and SSH
 	// agent it would if the script had been run directly.

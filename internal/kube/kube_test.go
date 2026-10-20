@@ -121,3 +121,24 @@ users:
 	}
 	return path
 }
+
+// create.sh stores $KUBECONFIG verbatim, and it can be a path list. Treating the
+// list as one filename made every such environment read as "unreachable".
+func TestLoadingRulesSplitsAPathList(t *testing.T) {
+	rules := loadingRules("/home/dev/.kube/a:/etc/kubernetes/b")
+	if rules.ExplicitPath != "" {
+		t.Fatalf("ExplicitPath = %q, want empty for a list", rules.ExplicitPath)
+	}
+	if got := rules.Precedence; len(got) != 2 || got[0] != "/home/dev/.kube/a" || got[1] != "/etc/kubernetes/b" {
+		t.Fatalf("Precedence = %v", got)
+	}
+}
+
+func TestLoadingRulesSingleFile(t *testing.T) {
+	rules := loadingRules("/home/dev/.kube/config")
+	// Precedence may already carry the environment's defaults; ExplicitPath wins
+	// over it, so that is the only thing this override has to set.
+	if rules.ExplicitPath != "/home/dev/.kube/config" {
+		t.Fatalf("ExplicitPath = %q", rules.ExplicitPath)
+	}
+}

@@ -12,6 +12,7 @@ syntax:
 # The Go CLI, built next to the source it replaces. build/ is gitignored; the
 # installed `kiseki` is still the Bash one until the port reaches install.sh.
 build:
+    @mkdir -p build
     go build -o build/kiseki ./cmd/kiseki
 
 # Fast checks for the Go CLI: the golden example, list output, and kubectl

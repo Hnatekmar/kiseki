@@ -86,15 +86,27 @@ if [[ "$with_docker" -eq 1 ]]; then
 fi
 
 if [[ "$with_go" -eq 1 ]]; then
-  # Go expects its tree at a fixed root: the binary resolves GOROOT from its own
-  # location, so installing only the executable would point it at a tree that is
-  # not there (or at whatever /usr/local/go happened to hold).
+  # The tarball is pinned for linux-amd64 like kubectl, helm and kind: fail loudly
+  # on any other runner rather than installing something that cannot run.
+  if [[ "$(uname -m)" != "x86_64" ]]; then
+    echo "Go is pinned for linux-amd64, not $(uname -m)" >&2
+    exit 1
+  fi
+
+  # Go resolves GOROOT from its own location, so the tree has to sit at a stable
+  # root; the executable alone would point at a tree that is not there. The root
+  # follows --bindir so a user-local install stays user-local.
+  go_root="$(dirname "$bindir")/go"
   fetch_verified "https://go.dev/dl/${GO_VERSION}.linux-amd64.tar.gz" \
     "$work/go.tgz" "$GO_SHA256"
-  rm -rf /usr/local/go
-  tar -xzf "$work/go.tgz" -C /usr/local
-  ln -sfn /usr/local/go/bin/go "$bindir/go"
-  ln -sfn /usr/local/go/bin/gofmt "$bindir/gofmt"
+  mkdir -p "$work/go-tree"
+  tar -xzf "$work/go.tgz" -C "$work/go-tree"
+  # Publish only after a clean extraction: a failed tar must not leave the runner
+  # without the toolchain it had before.
+  rm -rf "$go_root"
+  mv "$work/go-tree/go" "$go_root"
+  ln -sfn "$go_root/bin/go" "$bindir/go"
+  ln -sfn "$go_root/bin/gofmt" "$bindir/gofmt"
 fi
 
 # Absolute paths: the point of the log line is what was installed, not whatever

@@ -87,7 +87,11 @@ func checkout() (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return filepath.Dir(filepath.Dir(abs)), nil
+		// Only a chart at <root>/charts/kiseki implies its root. A KISEKI_CHART
+		// elsewhere is a chart override, not a checkout, so the walk-up decides.
+		if filepath.Base(abs) == "kiseki" && filepath.Base(filepath.Dir(abs)) == "charts" {
+			return filepath.Dir(filepath.Dir(abs)), nil
+		}
 	}
 	return Root()
 }

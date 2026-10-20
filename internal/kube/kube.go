@@ -14,6 +14,7 @@ package kube
 
 import (
 	"context"
+	"path/filepath"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -81,13 +82,28 @@ func phaseWord(pods []Pod, err error) string {
 	}
 }
 
+// loadingRules pins the client to the kubeconfig the environment was created
+// with. `create.sh` records $KUBECONFIG verbatim, and KUBECONFIG is a list
+// separated by os.PathListSeparator: ExplicitPath would take the whole list as
+// one filename, so a machine with several kubeconfigs would read as
+// "unreachable" for an environment the shell version lists fine.
+func loadingRules(kubeconfig string) *clientcmd.ClientConfigLoadingRules {
+	rules := clientcmd.NewDefaultClientConfigLoadingRules()
+	if kubeconfig == "" {
+		return rules
+	}
+	if paths := filepath.SplitList(kubeconfig); len(paths) == 1 {
+		rules.ExplicitPath = paths[0]
+	} else {
+		rules.Precedence = paths
+	}
+	return rules
+}
+
 // client is pinned to the kubeconfig the environment was created with: a context
 // name alone is ambiguous, because it can live in any file named by KUBECONFIG.
 func client(contextName, kubeconfig string) (kubernetes.Interface, error) {
-	rules := clientcmd.NewDefaultClientConfigLoadingRules()
-	if kubeconfig != "" {
-		rules.ExplicitPath = kubeconfig
-	}
+	rules := loadingRules(kubeconfig)
 
 	// Errors are returned unwrapped: clientcmd already names the context, and the
 	// caller adds it when printing ("kiseki: <context>: ...") without repeating it.
