@@ -2,8 +2,9 @@
 # this repo carries the caller only. Advisory: a finding never fails the job.
 #
 # The endpoint and model are this lab's Hermes proxy in front of the vLLM fleet;
-# `power-coding` is a proxy alias, so sampling lives in the proxy config rather
-# than here. Point these at another endpoint, or delete the file.
+# `power-instruct` is a proxy alias that resolves to an instruct candidate with
+# thinking disabled, so sampling lives in the proxy config rather than here.
+# Point these at another endpoint, or delete the file.
 name: review
 
 on:
@@ -24,7 +25,10 @@ jobs:
     secrets: inherit
     with:
       llm-url: https://proxy.personal-hermes.hnatekmar.dev/v1/chat/completions
-      model: power-coding
+      # Instruct, not the thinking alias: the review loop re-sends a ~170 KB
+      # transcript every turn, and reasoning tokens made that 1h38m for 11 files
+      # (537k output tokens). Do not add enable_thinking back here.
+      model: power-instruct
       # Different units, and the ladder has to hold: llm-timeout is seconds per
       # request (7200 = 2h), task-timeout is minutes per task including retries
       # (120 = 2h), and the runner allows 3h for the lane.

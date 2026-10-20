@@ -41,6 +41,20 @@ You need these tools:
 
 ### Step 1: Install Kiseki
 
+From a release, when you only need the CLI (no checkout):
+
+```bash
+curl -LO https://forgejo.srv.hnatekmar.dev/hnatekmar/kiseki/releases/latest/download/kiseki_<version>_linux_amd64.tar.gz
+tar -xzf kiseki_<version>_linux_amd64.tar.gz -C ~/.local/kiseki
+~/.local/kiseki/kiseki version
+```
+
+The archive carries the Helm chart beside the binary, so `kiseki example` and
+`kiseki list` work from it. `create`, `destroy` and `proxy` still run the Bash
+script and need a checkout until the port reaches them.
+
+From this checkout:
+
 ```bash
 ./scripts/install.sh
 ```

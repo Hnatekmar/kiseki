@@ -22,18 +22,31 @@ HELM_VERSION=v3.22.1
 HELM_SHA256=896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea
 JUST_VERSION=1.42.4
 JUST_SHA256=678efc1cfbd5fa5a88375daa7e2f3864a049d6d63a0296df925a2ae5f516cb56
+# Go builds the CLI. The version is pinned because client-go's release train
+# requires a matching toolchain (v0.37 needs 1.26), and because a runner that
+# silently gets a newer Go is a runner nobody has tested.
+GO_VERSION=go1.26.10
+GO_SHA256=ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5
+# goreleaser builds and publishes the release artifacts. Pinned and checked like
+# everything else that runs on a runner.
+GORELEASER_VERSION=v2.18.3
+GORELEASER_SHA256=b8dee4728bca1aba0d71a832a17cd0a3799f75372878e7ffa36aef2343bce0bc
 
 with_docker=0
+with_go=0
+with_goreleaser=0
 bindir=/usr/local/bin
 while [[ $# -gt 0 ]]; do
   case "$1" in
   --docker) with_docker=1 ;;
+  --go) with_go=1 ;;
+  --goreleaser) with_goreleaser=1 ;;
   --bindir)
     bindir="${2:?--bindir needs a directory}"
     shift
     ;;
   *)
-    echo "usage: $0 [--docker] [--bindir DIR]" >&2
+    echo "usage: $0 [--docker] [--go] [--goreleaser] [--bindir DIR]" >&2
     exit 1
     ;;
   esac
@@ -78,8 +91,45 @@ if [[ "$with_docker" -eq 1 ]]; then
   "$bindir/kind" version
 fi
 
+if [[ "$with_go" -eq 1 ]]; then
+  # The tarball is pinned for linux-amd64 like kubectl, helm and kind: fail loudly
+  # on any other runner rather than installing something that cannot run.
+  if [[ "$(uname -m)" != "x86_64" ]]; then
+    echo "Go is pinned for linux-amd64, not $(uname -m)" >&2
+    exit 1
+  fi
+
+  # Go resolves GOROOT from its own location, so the tree has to sit at a stable
+  # root; the executable alone would point at a tree that is not there. The root
+  # follows --bindir so a user-local install stays user-local.
+  go_root="$(dirname "$bindir")/go"
+  fetch_verified "https://go.dev/dl/${GO_VERSION}.linux-amd64.tar.gz" \
+    "$work/go.tgz" "$GO_SHA256"
+  mkdir -p "$work/go-tree"
+  tar -xzf "$work/go.tgz" -C "$work/go-tree"
+  # Publish only after a clean extraction: a failed tar must not leave the runner
+  # without the toolchain it had before.
+  rm -rf "$go_root"
+  mv "$work/go-tree/go" "$go_root"
+  ln -sfn "$go_root/bin/go" "$bindir/go"
+  ln -sfn "$go_root/bin/gofmt" "$bindir/gofmt"
+fi
+
+if [[ "$with_goreleaser" -eq 1 ]]; then
+  fetch_verified "https://github.com/goreleaser/goreleaser/releases/download/${GORELEASER_VERSION}/goreleaser_Linux_x86_64.tar.gz" \
+    "$work/goreleaser.tgz" "$GORELEASER_SHA256"
+  tar -xzf "$work/goreleaser.tgz" -C "$work" goreleaser
+  install -m0755 "$work/goreleaser" "$bindir/goreleaser"
+fi
+
 # Absolute paths: the point of the log line is what was installed, not whatever
 # happens to be first on PATH.
 "$bindir/just" --version
 "$bindir/kubectl" version --client
 "$bindir/helm" version --short
+if [[ "$with_go" -eq 1 ]]; then
+  "$bindir/go" version
+fi
+if [[ "$with_goreleaser" -eq 1 ]]; then
+  "$bindir/goreleaser" --version
+fi

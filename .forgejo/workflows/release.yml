@@ -1,0 +1,55 @@
+# Release the CLI when a version tag is pushed.
+#
+# Builds, archives, checksums and publishes through goreleaser, which talks to
+# Forgejo's Gitea-compatible API. The toolchain is installed the same way the ci
+# workflow installs it: pinned versions, sha256 verified, no unpinned actions on a
+# runner that holds credentials.
+#
+# The token: Forgejo issues a repository-scoped token as github.token. If the
+# instance restricts what that token may do, set a repository secret named
+# RELEASE_TOKEN with a write-scoped token and switch the env below to
+# secrets.RELEASE_TOKEN.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  goreleaser:
+    runs-on: [self-hosted, mgmt]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The changelog is generated from history, so a shallow clone would
+          # produce an empty one.
+          fetch-depth: 0
+
+      - name: Install tooling
+        run: |
+          set -euo pipefail
+          apt-get update -qq
+          apt-get install -y -qq curl ca-certificates >/dev/null
+          ./scripts/ci/install-tools.sh --go --goreleaser
+
+      - name: Validate the release config
+        run: goreleaser check
+
+      # The smoke lane proves the Bash CLI still works before a tag is cut; this
+      # only re-runs the unit tests, because a release should not depend on the
+      # cluster being up.
+      - name: Unit tests
+        run: just test-go
+
+      - name: Release
+        env:
+          GITEA_TOKEN: ${{ github.token }}
+        run: goreleaser release --clean

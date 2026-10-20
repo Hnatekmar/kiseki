@@ -10,7 +10,7 @@ This repository provides Kubernetes-based development environments using a Helm 
 
 - **Orchestration**: Kubernetes / kind
 - **Packaging**: Helm
-- **Provisioning**: Bash
+- **Provisioning**: Bash (in-cluster `up.sh`) and Go (the CLI, see ADR 0004)
 - **Task Runner**: Just
 - **Base Image**: fedora:42
 
@@ -20,6 +20,40 @@ This repository provides Kubernetes-based development environments using a Helm 
 - Use conventional commits (feat, fix, refactor, chore, etc.)
 - Keep subject line under 72 characters.
 - Do not use emoji prefixes.
+
+### Go CLI
+- Code lives in `cmd/kiseki` and `internal/`; `internal/cli` owns the command
+  surface, `internal/kube` owns cluster reads, `internal/state` owns the state
+  directory, `internal/repo` locates the checkout.
+- `go vet ./...` and `go test ./...` must pass (`just test-go`).
+- Dependencies stay minimal: `client-go` for cluster reads, `yaml.v3` for chart
+  values. A new dependency needs a reason in the commit message, not a
+  convenience, and its version must match the `kubectl` pinned in
+  `scripts/ci/install-tools.sh`.
+- Cluster reads go through `client-go` in `internal/kube`; do not add a second way
+  to read the cluster. `helm`, and the Bash `create`/`destroy` paths the binary
+  delegates to, stay child processes.
+- Flags are parsed with `flag`, one `FlagSet` per subcommand (`newFlagSet` in
+  `internal/cli/root.go`), not by hand and not with a framework.
+- Anything that talks to a cluster or a binary must be testable without one: pass
+  a `kubernetes.Interface` (see `internal/kube/kube_test.go`) or stub the package
+  variable (see `phase` in `internal/cli/list.go`).
+- `examples/extraSVC.yaml` is generated from `internal/cli/example.yaml`, which is
+  embedded. A test diffs the generator against the committed example; change both
+  in the same commit.
+
+### Releases
+- Pushing a `v*` tag runs `.forgejo/workflows/release.yml`; nothing else publishes.
+- `.goreleaser.yaml` puts `charts/kiseki/**` in every archive, so a released
+  binary can render its own example. Keep `repo.Root()`'s executable-relative
+  resolution working for that layout (binary beside `charts/`); a change there
+  breaks downloads, not just tests.
+- `just release-check` validates the config, `just release-snapshot` builds the
+  archives locally without publishing, and both need goreleaser.
+- Version strings come from `-X main.version`/`main.commit`/`main.date` via
+  goreleaser and are printed by `kiseki version`. Never hand-edit them.
+- An installed tarball has no `scripts/`, so delegated commands report that
+  instead of running: that is intentional until the port finishes.
 
 ### File Structure
 - Chart lives in `charts/kiseki/`
