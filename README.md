@@ -177,6 +177,9 @@ CI runs the same recipes on Forgejo Actions: `just lint` on the `mgmt` runner, a
 `just test` on the `dind` runner. That runner's docker daemon is not on localhost, so
 `scripts/ci/kind-config.sh` writes a kind config whose API server address is the
 daemon's bridge and exports it as `KIND_CONFIG`; `create-cluster.sh` passes it through.
+It also exports `KIND_DNS=1.1.1.1`, because the node inherits a resolver that lives
+inside kind's own service CIDR and cannot answer from inside the cluster.
+`create-cluster.sh --delete` removes the test cluster (CI cleanup uses it).
 Pull requests also get an advisory AI review through `hnatekmar/ci-template`.
 
 ---

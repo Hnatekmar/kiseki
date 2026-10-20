@@ -92,7 +92,13 @@ if [ -n "${KISEKI_DOTS_REPO:-}" ]; then
     git clone --depth 1 "$KISEKI_DOTS_REPO" /workdir/dots
   fi
   cd /workdir/dots
-  bash bootstrap.sh
+  # dots.repo is configurable, so the checkout may have no installer. Dying here
+  # would restart the container forever and leave no way to log in and look.
+  if [ -f bootstrap.sh ]; then
+    bash bootstrap.sh
+  else
+    echo "WARN: $KISEKI_DOTS_REPO has no bootstrap.sh, skipping dotfiles install" >&2
+  fi
 else
   echo "=== dotfiles bootstrap disabled (dots.enabled=false) ==="
 fi

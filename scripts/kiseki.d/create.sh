@@ -435,8 +435,14 @@ cmd_create() {
     # Authenticate with the private half of the key the pod was given: without
     # this, a --ssh-key that is not the caller's default identity makes a
     # working environment look broken ("Permission denied (publickey)").
+    # Only a path that is a .pub with a sibling private key is usable as -i;
+    # anything else has to fall back to the agent/default identities, and says so.
     local identity=()
-    [[ -f "${key%.pub}" ]] && identity=(-i "${key%.pub}")
+    if [[ "$key" == *.pub && -f "${key%.pub}" ]]; then
+      identity=(-i "${key%.pub}")
+    else
+      log "  Note: no private key next to $key; using the default SSH identities"
+    fi
     if ! run_quiet ssh -o BatchMode=yes -o ConnectTimeout=15 "${identity[@]}" "kiseki-$name" true; then
       err ""
       err "Environment '$name' exists but SSH check failed."

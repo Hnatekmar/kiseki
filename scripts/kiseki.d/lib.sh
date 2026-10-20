@@ -176,42 +176,62 @@ _waiting_text() {
   esac
 }
 
-# One line describing what the environment pod is doing right now.
-# Prints "ready" when every container reports ready.
+# One line describing what the environment pod is doing right now. Prints
+# "ready" when every container reports ready, and a "fatal: ..." line when the
+# environment cannot become ready on its own, so the caller can stop waiting.
 environment_state() {
   local ctx="$1" ns="$2"
   # Field separator is US (0x1f), not a tab: bash treats tab as IFS whitespace,
   # which collapses consecutive empty fields, so a pod with no init containers
   # would shift the container statuses into the message field.
-  local sep=$'\x1f' out phase message init containers err="" errfile="${TMPDIR:-/tmp}/kiseki-state.$$"
+  local sep=$'\x1f' out phase message init containers deleting err="" errfile
+  errfile="$(mktemp)"
   # A failing kubectl call must not be reported as "no pod yet": a deleted
   # namespace or an unreachable context would otherwise look like a pod that
   # never gets created, for the whole 20 minute budget.
   if ! out="$(kubectl --context "$ctx" get pods -n "$ns" \
     -l "app.kubernetes.io/instance=$ns" \
-    -o jsonpath='{range .items[*]}{.status.phase}{"\u001f"}{.status.conditions[?(@.type=="PodScheduled")].message}{"\u001f"}{range .status.initContainerStatuses[*]}{.name}={.ready},{.state.waiting.reason} {end}{"\u001f"}{range .status.containerStatuses[*]}{.name}={.ready},{.state.waiting.reason},{.state.running.startedAt} {end}{"\n"}{end}' \
+    -o jsonpath='{range .items[*]}{.metadata.deletionTimestamp}{"\u001f"}{.status.phase}{"\u001f"}{.status.conditions[?(@.type=="PodScheduled")].message}{"\u001f"}{range .status.initContainerStatuses[*]}{.name}={.ready},{.state.waiting.reason},{.state.terminated.exitCode} {end}{"\u001f"}{range .status.containerStatuses[*]}{.name}={.ready},{.state.waiting.reason},{.state.running.startedAt},{.state.terminated.exitCode},{.lastState.terminated.exitCode} {end}{"\n"}{end}' \
     2>"$errfile")"; then
     err="$(<"$errfile")"
     err="${err%%$'\n'*}"
   fi
   rm -f "$errfile"
-  out="${out%%$'\n'*}"
 
   if [[ -z "$out" ]]; then
     if [[ -n "$err" ]]; then
-      printf 'cannot read the pod: %s' "$err"
+      printf 'fatal: cannot read the pod: %s' "$err"
       return 0
     fi
     # kubectl reports a missing namespace as an empty list with exit 0, so the
     # only way to tell "not created yet" from "deleted underneath us" is to ask.
     if ! kubectl --context "$ctx" get namespace "$ns" >/dev/null 2>&1; then
-      printf 'namespace %s no longer exists' "$ns"
+      printf 'fatal: namespace %s no longer exists' "$ns"
       return 0
     fi
     printf 'waiting for the pod to be created'
     return 0
   fi
-  IFS="$sep" read -r phase message init containers <<<"$out"
+
+  # A replaced pod can overlap with its predecessor for a moment, and a
+  # terminating pod still reports ready containers. Describe the pod that will
+  # serve, not the one that is leaving.
+  local line="" candidate
+  while IFS= read -r candidate; do
+    [[ -n "$candidate" ]] || continue
+    [[ "${candidate%%$sep*}" == "" ]] && { line="$candidate"; break; }
+    [[ -z "$line" ]] && line="$candidate"
+  done <<<"$out"
+  IFS="$sep" read -r deleting phase message init containers <<<"$line"
+  if [[ -n "$deleting" ]]; then
+    printf 'fatal: the pod is being deleted'
+    return 0
+  fi
+
+  if [[ "$phase" == "Failed" || "$phase" == "Succeeded" ]]; then
+    printf 'fatal: the pod exited (%s)' "$phase"
+    return 0
+  fi
 
   # An unschedulable pod reports why only in the PodScheduled condition; without
   # that the wait looks stuck with no cause, which is the worst failure mode.
@@ -222,40 +242,64 @@ environment_state() {
     return 0
   fi
 
-  local item name reason
+  local item name rest flag reason started exit_code last_exit
   for item in $init; do
-    case "$item" in
-    *=false,*)
-      name="${item%%=*}"
-      reason="${item#*=false,}"
-      printf 'init %s: %s' "$name" "$(_waiting_text "${reason:-starting}")"
-      return 0
-      ;;
-    esac
-  done
-
-  local total=0 ready=0 rest flag started
-  for item in $containers; do
     [[ -n "$item" ]] || continue
-    total=$((total + 1))
     name="${item%%=*}"
-    rest="${item#*=}"        # <ready>,<waiting reason>,<running since>
+    rest="${item#*=}"            # <ready>,<waiting reason>,<terminated exit code>
     flag="${rest%%,*}"
     rest="${rest#*,}"
     reason="${rest%%,*}"
-    started="${rest#*,}"
+    exit_code="${rest#*,}"
+    [[ "$flag" == "true" ]] && continue
+    if [[ -n "$reason" ]]; then
+      printf 'init %s: %s' "$name" "$(_waiting_text "$reason")"
+    elif [[ -n "$exit_code" ]]; then
+      # Init containers are retried, so a non-zero exit is progress, not a verdict.
+      printf 'init %s: exited %s, retrying' "$name" "$exit_code"
+    else
+      printf 'init %s: starting' "$name"
+    fi
+    return 0
+  done
+
+  local total=0 ready=0
+  for item in $containers; do
+    [[ -n "$item" ]] || continue
+    name="${item%%=*}"
+    rest="${item#*=}"            # <ready>,<waiting reason>,<running since>,<exit>,<last exit>
+    flag="${rest%%,*}"
+    rest="${rest#*,}"
+    reason="${rest%%,*}"
+    rest="${rest#*,}"
+    started="${rest%%,*}"
+    rest="${rest#*,}"
+    exit_code="${rest%%,*}"
+    last_exit="${rest#*,}"
     if [[ "$flag" == "true" ]]; then
+      total=$((total + 1))
       ready=$((ready + 1))
       continue
     fi
+    # A container that ran to completion is not a readiness gate: it did its job.
+    # `exit` covers the moment it finishes, `last_exit` the restarts that follow
+    # under restartPolicy: Always, where it would otherwise read as crash-looping.
+    if [[ "$exit_code" == "0" || "$last_exit" == "0" ]]; then
+      continue
+    fi
+    total=$((total + 1))
     if [[ -n "$reason" ]]; then
       printf '%s: %s' "$name" "$(_waiting_text "$reason")"
-    elif [[ -n "$started" && "$name" == "kiseki" ]]; then
-      # Running, probe not passing yet: this is up.sh installing packages and
-      # cloning dotfiles, which is the slow part of a first start.
-      printf 'provisioning (packages and dotfiles)'
     elif [[ -n "$started" ]]; then
-      printf '%s: starting' "$name"
+      if [[ "$name" == "kiseki" ]]; then
+        # Running, probe not passing yet: this is up.sh installing packages and
+        # cloning dotfiles, which is the slow part of a first start.
+        printf 'provisioning (packages and dotfiles)'
+      else
+        printf '%s: starting' "$name"
+      fi
+    elif [[ -n "$exit_code" ]]; then
+      printf '%s: crash-looping (exit %s)' "$name" "$exit_code"
     else
       printf '%s: creating' "$name"
     fi
@@ -270,7 +314,6 @@ environment_state() {
   case "$phase" in
   Running) printf 'provisioning (packages and dotfiles)' ;;
   Pending) printf 'pending' ;;
-  Failed) printf 'pod failed to start' ;;
   *) printf '%s' "${phase:-unknown}" ;;
   esac
 }
@@ -292,6 +335,12 @@ wait_for_environment() {
       [[ "$interactive" -eq 1 ]] && printf '\r\033[K'
       log "  ✓ ready after $((SECONDS - started))s"
       return 0
+    fi
+    # Unrecoverable states are reported now, not after twenty minutes of polling.
+    if [[ "$detail" == fatal:* ]]; then
+      [[ "$interactive" -eq 1 ]] && printf '\r\033[K'
+      log "  ✗ ${detail#fatal: } ($((SECONDS - started))s)"
+      return 1
     fi
     if [[ "$interactive" -eq 1 ]]; then
       printf '\r\033[K  %s %s (%ds)' "${frames[frame]}" "$detail" "$((SECONDS - started))"

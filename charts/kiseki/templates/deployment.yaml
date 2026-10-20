@@ -19,6 +19,9 @@ spec:
     spec:
 {{- $gpu := .Values.gpu | default dict }}
 {{- $tolerations := .Values.tolerations | default list }}
+{{- if not (kindIs "slice" $tolerations) }}
+{{- fail "tolerations must be a list" }}
+{{- end }}
 {{- if $gpu.enabled }}
 {{- $gpuCount := int $gpu.count }}
 {{- if or (lt $gpuCount 1) (ne (toString $gpuCount) (toString $gpu.count)) }}
@@ -89,7 +92,7 @@ spec:
 {{- $env = append $env (dict "name" "KISEKI_WAIT_PORTS" "value" (join " " $waitPorts)) }}
 {{- end }}
 {{- if $dots.enabled }}
-{{- $env = append $env (dict "name" "KISEKI_DOTS_REPO" "value" ($dots.repo | default "https://github.com/Hnatekmar/dots.git")) }}
+{{- $env = append $env (dict "name" "KISEKI_DOTS_REPO" "value" (required "dots.repo is required when dots.enabled is true" $dots.repo)) }}
 {{- end }}
 {{- with .Values.extraInitContainers }}
       initContainers:

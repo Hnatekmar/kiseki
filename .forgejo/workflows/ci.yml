@@ -10,6 +10,10 @@
 # `just test` is the contract, not a copy of it: the workflow installs the tools
 # and hands `just` a kind config through KIND_CONFIG, so a change to the recipe
 # changes CI too. Nothing here re-implements a check.
+#
+# Runners are persistent and self-hosted, so a pull request never executes code
+# on them from a fork: the guard below fails closed when the repository field is
+# absent, and `.forgejo/workflows/**` is a protected path on main.
 name: ci
 
 on:
@@ -19,44 +23,33 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Forgejo 15 ignores this, but it documents the scope the workflow expects and
+# keeps the intent explicit if that changes.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
-
-env:
-  # Pinned: a floating kind or helm turns an unrelated refactor into a red build.
-  KIND_VERSION: v0.33.0
-  KUBECTL_VERSION: v1.37.1
-  # Major version 3 on purpose: the chart is helm-3 era, and the local toolchain
-  # is v3. A helm 4 runner would test a toolchain nobody uses.
-  HELM_VERSION: v3.22.1
-  JUST_VERSION: 1.42.4
 
 jobs:
   lint:
     runs-on: [self-hosted, mgmt]
     timeout-minutes: 15
+    # The CLI's validation assertions are only meaningful when kubectl, helm and
+    # ssh exist: cmd_create checks for them before it parses a single flag, so
+    # without them a bad flag "fails" for the wrong reason and the check is a
+    # no-op. They are installed below, and the assertions now match the message.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install helm and just
+      - name: Install tooling
         run: |
           set -euo pipefail
-          curl -fsSL -o /tmp/helm.tgz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
-          tar -xzf /tmp/helm.tgz -C /tmp
-          install -m0755 /tmp/linux-amd64/helm /usr/local/bin/helm
-          curl -fsSL -o /tmp/just.tgz \
-            "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz"
-          tar -xzf /tmp/just.tgz -C /tmp just
-          install -m0755 /tmp/just /usr/local/bin/just
-          helm version --short
-          just --version
-
-      - name: Syntax
-        run: |
-          set -euo pipefail
-          bash -n scripts/*.sh scripts/ci/*.sh scripts/kiseki.d/*.sh
-          echo "bash -n: ok"
+          apt-get update -qq
+          apt-get install -y -qq curl ca-certificates openssh-client >/dev/null
+          ./scripts/ci/install-tools.sh
 
       - name: Chart and CLI checks
         run: just lint
@@ -64,6 +57,7 @@ jobs:
   smoke:
     runs-on: [self-hosted, dind]
     timeout-minutes: 30
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     # The runner script injects this: the job container is a sibling of the dind
     # daemon, so the daemon is reachable at the host gateway, not on localhost.
     env:
@@ -75,25 +69,18 @@ jobs:
         run: |
           set -euo pipefail
           # The job image (node:22-bookworm) ships no docker CLI; kind needs one.
+          # The update is hoisted out of the branch: the apt lists of a reused
+          # image may be stale or empty even when docker is already present.
+          apt-get update -qq
           if ! command -v docker >/dev/null 2>&1; then
-            apt-get update -qq
             apt-get install -y -qq docker.io
           fi
-          apt-get install -y -qq curl ca-certificates openssh-client socat >/dev/null
+          # iproute2 for `ss`, which the ssh proxy uses to decide whether the
+          # port-forward is already up; without it every `ssh kiseki-*` tears
+          # down and rebuilds the forward.
+          apt-get install -y -qq curl ca-certificates openssh-client socat iproute2 >/dev/null
           docker version --format 'client={{.Client.Version}} server={{.Server.Version}}'
-
-          curl -fsSL -o /usr/local/bin/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
-          chmod +x /usr/local/bin/kind
-          curl -fsSL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
-          chmod +x /usr/local/bin/kubectl
-          curl -fsSL -o /tmp/helm.tgz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
-          tar -xzf /tmp/helm.tgz -C /tmp
-          install -m0755 /tmp/linux-amd64/helm /usr/local/bin/helm
-          curl -fsSL -o /tmp/just.tgz \
-            "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz"
-          tar -xzf /tmp/just.tgz -C /tmp just
-          install -m0755 /tmp/just /usr/local/bin/just
-          kind version; kubectl version --client; helm version --short; just --version
+          ./scripts/ci/install-tools.sh --docker
 
       - name: Point kind at the dind daemon
         run: |
@@ -112,9 +99,11 @@ jobs:
         run: |
           set -euo pipefail
           # `just test` passes this key to kiseki create; generating it also
-          # exercises the CLI's default-key path.
+          # exercises the CLI's default-key path. A persisted HOME would make
+          # ssh-keygen refuse to overwrite, so the stale pair goes first.
           mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
-          ssh-keygen -t ed25519 -N '' -f "$HOME/.ssh/id_ed25519" >/dev/null
+          rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_ed25519.pub"
+          ssh-keygen -q -t ed25519 -N '' -f "$HOME/.ssh/id_ed25519"
           # No dotfiles bootstrap: it pulls a rust toolchain and does not fit in
           # the recipe's 1Gi, and this job tests the plumbing, not someone's zsh.
           KISEKI_TEST_ARGS='--set dots.enabled=false' just test
@@ -128,7 +117,7 @@ jobs:
           kubectl get events -A --sort-by=.lastTimestamp | tail -40
           for ns in $(kubectl get ns -o name | grep kiseki || true); do
             echo "=== $ns"
-            kubectl -n "${ns#namespace/}" describe pod
+            kubectl -n "${ns#namespace/}" describe pods -l app.kubernetes.io/instance
             kubectl -n "${ns#namespace/}" logs -l app.kubernetes.io/instance -c kiseki --tail=80
           done
 
@@ -137,4 +126,6 @@ jobs:
         run: |
           set +e
           ./scripts/kiseki.sh destroy test -f
-          kind delete cluster --name kiseki-test-cluster
+          # The cluster name lives in create-cluster.sh; asking it to delete
+          # keeps the second copy (which would silently leak) out of this file.
+          ./scripts/create-cluster.sh --delete

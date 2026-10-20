@@ -1,8 +1,13 @@
 set shell := ["bash", "-cu"]
 
-# Syntax first: a broken script fails here in a second, not after a cluster boots
+# Syntax first: a broken script fails here in a second, not after a cluster boots.
+# bash -n takes ONE script: extra words become that script's positional arguments,
+# so `bash -n a.sh b.sh` never looks at b.sh. Hence the loop.
 syntax:
-    bash -n scripts/*.sh scripts/ci/*.sh scripts/kiseki.d/*.sh
+    @for f in scripts/*.sh scripts/ci/*.sh scripts/kiseki.d/*.sh charts/kiseki/static/up.sh; do \
+        bash -n "$f" || exit 1; \
+    done
+    @echo "bash -n: ok"
 
 # Render checks for CPU, GPU, ingress, sidecars, docker, persistence, and empty resources
 lint: syntax
@@ -17,9 +22,11 @@ lint: syntax
     # dotfiles bootstrap is on by default and can be turned off
     helm template test charts/kiseki --set ssh.authorizedKey=test | grep -q 'name: KISEKI_DOTS_REPO'
     ! helm template test charts/kiseki --set ssh.authorizedKey=test --set dots.enabled=false | grep -q 'name: KISEKI_DOTS_REPO'
+    ! helm template test charts/kiseki --set ssh.authorizedKey=test --set dots.repo= >/dev/null 2>&1
     # scheduling: the control-plane toleration is on by default, and removable
     helm template test charts/kiseki --set ssh.authorizedKey=test | grep -q 'node-role.kubernetes.io/control-plane'
     ! helm template test charts/kiseki --set ssh.authorizedKey=test --set tolerations=null | grep -q 'tolerations:'
+    ! helm template test charts/kiseki --set ssh.authorizedKey=test --set-json 'tolerations={"a":1}' >/dev/null 2>&1
     # ingress: host required, ssh port rejected, TLS annotation rendered
     helm template test charts/kiseki --set ssh.authorizedKey=test --set ingress.enabled=true --set ingress.host=app.example.com --set ingress.port=3000 | grep -q 'cert-manager.io/cluster-issuer: letsencrypt-cloudflare'
     ! helm template test charts/kiseki --set ssh.authorizedKey=test --set ingress.enabled=true --set ingress.host=app.example.com --set ingress.tls=false | grep -q 'cert-manager.io/cluster-issuer'
@@ -39,15 +46,17 @@ lint: syntax
     helm template test charts/kiseki --set ssh.authorizedKey=test --set storage.enabled=true | grep -q 'mountPath: /root'
     helm template test charts/kiseki --set ssh.authorizedKey=test --set storage.enabled=true --set storage.size=20Gi | grep -q 'storage: 20Gi'
     ! helm template test charts/kiseki --set ssh.authorizedKey=test --set storage.enabled=true | grep -q 'mountPath: /data'
-    ! ./scripts/kiseki.sh create x --persistence-size nope >/dev/null 2>&1
-    ! ./scripts/kiseki.sh create x --storage-class 'Bad_Class' >/dev/null 2>&1
+    @./scripts/kiseki.sh create x --persistence-size nope 2>&1 | grep -q 'Invalid --persistence-size'
+    @./scripts/kiseki.sh create x --storage-class 'Bad_Class' 2>&1 | grep -q 'Invalid --storage-class'
     # the committed example must match the generator
     diff <(./scripts/kiseki.sh example) examples/extraSVC.yaml
-    # CLI validation fails before it touches a cluster
-    ! ./scripts/kiseki.sh create x --address app.example.com >/dev/null 2>&1
-    ! ./scripts/kiseki.sh create x --port 3000 >/dev/null 2>&1
-    ! ./scripts/kiseki.sh create x --address app.example.com --port 22 >/dev/null 2>&1
-    ! ./scripts/kiseki.sh create x --address not-a-host --port 3000 >/dev/null 2>&1
+    # CLI validation fails before it touches a cluster. The expected message is
+    # part of the assertion: "exits non-zero" would also pass when kubectl or
+    # ssh is missing, which is exactly the mistake this check exists to catch.
+    @./scripts/kiseki.sh create x --address app.example.com 2>&1 | grep -q 'must be given together'
+    @./scripts/kiseki.sh create x --port 3000 2>&1 | grep -q 'must be given together'
+    @./scripts/kiseki.sh create x --address app.example.com --port 22 2>&1 | grep -q 'reserved for ssh'
+    @./scripts/kiseki.sh create x --address not-a-host --port 3000 2>&1 | grep -q 'Invalid --address'
     # installer round trip in a throwaway bin directory
     tmp=$(mktemp -d) && ./scripts/install.sh --bindir "$tmp" >/dev/null && "$tmp/kiseki" --help >/dev/null && ./scripts/install.sh --uninstall --bindir "$tmp" >/dev/null && [ ! -e "$tmp/kiseki" ] && rm -rf "$tmp"
 

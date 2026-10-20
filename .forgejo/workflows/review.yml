@@ -9,6 +9,11 @@ name: review
 on:
   pull_request:
 
+# Forgejo 15 has no `secrets:` block in workflow_call and ignores `permissions:`,
+# so `secrets: inherit` is the only way to pass a token to the called workflow.
+# ci-template is this instance's own template, and @main is deliberate: the review
+# follows its fixes. Pin @<sha> here to freeze the version instead.
+
 concurrency:
   group: review-${{ github.ref }}
   cancel-in-progress: true
@@ -20,6 +25,8 @@ jobs:
     with:
       llm-url: https://proxy.personal-hermes.hnatekmar.dev/v1/chat/completions
       model: power-coding
-      # A slow local model is a timeout to raise, not a reason to downgrade it.
+      # Different units, and the ladder has to hold: llm-timeout is seconds per
+      # request (7200 = 2h), task-timeout is minutes per task including retries
+      # (120 = 2h), and the runner allows 3h for the lane.
       llm-timeout: '7200'
       task-timeout: '120'
