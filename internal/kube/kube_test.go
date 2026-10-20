@@ -82,11 +82,14 @@ func TestPhaseTimesOutOnAHangingServer(t *testing.T) {
 	kubeconfig := writeKubeconfig(t, srv.URL)
 
 	start := time.Now()
-	got := Phase("hang", "kiseki-x", kubeconfig)
+	got, err := Phase("hang", "kiseki-x", kubeconfig)
 	elapsed := time.Since(start)
 
 	if got != "unreachable" {
 		t.Fatalf("Phase = %q, want unreachable", got)
+	}
+	if err == nil {
+		t.Fatal("Phase returned no error for a server that never answers")
 	}
 	if elapsed > Timeout+5*time.Second {
 		t.Fatalf("Phase took %s, want it bounded by the %s deadline", elapsed, Timeout)

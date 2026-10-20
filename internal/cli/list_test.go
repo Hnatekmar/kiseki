@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,11 +16,11 @@ func stubPhase(t *testing.T, answers map[string]string) {
 	t.Helper()
 	original := phase
 	t.Cleanup(func() { phase = original })
-	phase = func(contextName, _, _ string) string {
+	phase = func(contextName, _, _ string) (string, error) {
 		if word, ok := answers[contextName]; ok {
-			return word
+			return word, nil
 		}
-		return "unreachable"
+		return "unreachable", fmt.Errorf("context %q: dial tcp: connection refused", contextName)
 	}
 }
 
@@ -176,5 +178,35 @@ func TestListRejectsCorruptPort(t *testing.T) {
 	}
 	if !strings.Contains(errw.String(), "port") {
 		t.Fatalf("stderr = %q", errw.String())
+	}
+}
+
+// "unreachable" is a display word, not a diagnosis: the cause goes to stderr so
+// a Forbidden or a bad kubeconfig is distinguishable from a dead cluster, while
+// stdout stays exactly the table or the JSON document.
+func TestListExplainsUnreachable(t *testing.T) {
+	threeEnvs(t)
+
+	var out, errw bytes.Buffer
+	if code := runList(nil, &out, &errw); code != 0 {
+		t.Fatalf("list exited %d: %s", code, errw.String())
+	}
+	if !strings.Contains(errw.String(), "connection refused") {
+		t.Fatalf("stderr = %q, want the cause", errw.String())
+	}
+	if !strings.Contains(errw.String(), "missing-ctx") {
+		t.Fatalf("stderr = %q, want the context named", errw.String())
+	}
+	if strings.Contains(out.String(), "connection refused") {
+		t.Fatal("the cause leaked onto stdout")
+	}
+
+	out.Reset()
+	errw.Reset()
+	if code := runList([]string{"--json"}, &out, &errw); code != 0 {
+		t.Fatalf("list --json exited %d: %s", code, errw.String())
+	}
+	if !json.Valid(out.Bytes()) {
+		t.Fatalf("stdout is not valid JSON: %s", out.String())
 	}
 }

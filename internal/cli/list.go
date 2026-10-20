@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"forgejo.srv.hnatekmar.dev/hnatekmar/kiseki/internal/kube"
 	"forgejo.srv.hnatekmar.dev/hnatekmar/kiseki/internal/state"
@@ -47,19 +48,45 @@ func runList(args []string, out, errw io.Writer) int {
 		return 0
 	}
 
-	// One row per environment, each carrying the phase read from the cluster it
-	// was created on. A context that cannot be reached is a row, not an error:
-	// the rest of the list is still worth printing.
-	rows := make([]envJSON, 0, len(envs))
-	for _, env := range envs {
-		rows = append(rows, envJSON{
-			Name:      env.Name,
-			Context:   env.Context,
-			Port:      env.Port,
-			Namespace: env.Namespace(),
-			Phase:     phase(env.Context, env.Namespace(), env.Kubeconfig),
-			URL:       env.URL,
-		})
+	// One row per environment. Rows are filled concurrently because each one asks
+	// a cluster with its own deadline: ten environments behind a dead VPN should
+	// cost one deadline, not ten. Writing to a fixed index keeps the output in
+	// name order.
+	rows := make([]envJSON, len(envs))
+	failures := make([]error, len(envs))
+
+	var wg sync.WaitGroup
+	for i, env := range envs {
+		wg.Add(1)
+		go func(i int, env state.Env) {
+			defer wg.Done()
+			word, err := phase(env.Context, env.Namespace(), env.Kubeconfig)
+			rows[i] = envJSON{
+				Name:      env.Name,
+				Context:   env.Context,
+				Port:      env.Port,
+				Namespace: env.Namespace(),
+				Phase:     word,
+				URL:       env.URL,
+			}
+			failures[i] = err
+		}(i, env)
+	}
+	wg.Wait()
+
+	// The table and the JSON document are the only things on stdout; the reason a
+	// row says "unreachable" goes to stderr, where it cannot corrupt either.
+	for i, err := range failures {
+		if err == nil {
+			continue
+		}
+		// Name the environment once: clientcmd already includes the context in
+		// its own message, and repeating it reads like two errors.
+		if strings.Contains(err.Error(), envs[i].Context) {
+			fmt.Fprintf(errw, "kiseki: %v\n", err)
+		} else {
+			fmt.Fprintf(errw, "kiseki: %s: %v\n", envs[i].Context, err)
+		}
 	}
 
 	if *jsonMode {

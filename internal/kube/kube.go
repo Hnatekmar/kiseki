@@ -14,7 +14,6 @@ package kube
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -42,14 +41,16 @@ func GetPods(ctx context.Context, contextName, ns, selector, kubeconfig string) 
 	return listPods(ctx, cs, ns, selector)
 }
 
-// Phase is the word `kiseki list` prints for one environment. It never returns
-// an error: one unreachable context must not stop the listing.
-func Phase(contextName, ns, kubeconfig string) string {
+// Phase is the word `kiseki list` prints for one environment, plus the reason
+// when the word is "unreachable". Returning the error matters: an RBAC Forbidden
+// on a healthy cluster and an expired credential both read as "unreachable", and
+// without the cause the operator chases the wrong problem.
+func Phase(contextName, ns, kubeconfig string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
 	defer cancel()
 
 	pods, err := GetPods(ctx, contextName, ns, "app.kubernetes.io/instance="+ns, kubeconfig)
-	return phaseWord(pods, err)
+	return phaseWord(pods, err), err
 }
 
 // listPods takes a client, not a kubeconfig, so tests can pass client-go's fake
@@ -88,17 +89,15 @@ func client(contextName, kubeconfig string) (kubernetes.Interface, error) {
 		rules.ExplicitPath = kubeconfig
 	}
 
+	// Errors are returned unwrapped: clientcmd already names the context, and the
+	// caller adds it when printing ("kiseki: <context>: ...") without repeating it.
 	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 		rules,
 		&clientcmd.ConfigOverrides{CurrentContext: contextName},
 	).ClientConfig()
 	if err != nil {
-		return nil, fmt.Errorf("context %q: %w", contextName, err)
+		return nil, err
 	}
 
-	cs, err := kubernetes.NewForConfig(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("context %q: %w", contextName, err)
-	}
-	return cs, nil
+	return kubernetes.NewForConfig(cfg)
 }

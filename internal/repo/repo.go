@@ -63,9 +63,10 @@ func ChartDir() (string, error) {
 }
 
 // LegacyScript is the Bash CLI, used by subcommands the port has not reached
-// yet. It disappears with the last of them.
+// yet. It disappears with the last of them. It does not imply IsExecutable:
+// delegate falls back to `bash path` when the mode bits are missing.
 func LegacyScript() (string, error) {
-	root, err := Root()
+	root, err := checkout()
 	if err != nil {
 		return "", err
 	}
@@ -77,6 +78,20 @@ func LegacyScript() (string, error) {
 	return path, nil
 }
 
+// checkout is the source tree. KISEKI_CHART names the chart inside it, so the
+// override has to move the script lookup too: an installed binary pointed at one
+// checkout must not delegate to another.
+func checkout() (string, error) {
+	if v := strings.TrimSpace(os.Getenv("KISEKI_CHART")); v != "" {
+		abs, err := filepath.Abs(v)
+		if err != nil {
+			return "", err
+		}
+		return filepath.Dir(filepath.Dir(abs)), nil
+	}
+	return Root()
+}
+
 // IsExecutable reports whether path can be run directly. A checkout that lost
 // its mode bits still works through `bash path`, which is what delegate does.
 func IsExecutable(path string) bool {
@@ -84,18 +99,32 @@ func IsExecutable(path string) bool {
 	return err == nil && st.Mode().IsRegular() && st.Mode().Perm()&0o111 != 0
 }
 
-// isCheckout reports whether dir is a kiseki checkout: the chart, plus a marker
-// that says the directory is a source tree rather than any directory that
-// happens to contain a chart. Without the marker, `delegate` would happily run a
-// scripts/kiseki.sh found in whatever directory the binary was started from.
+// isCheckout reports whether dir is a kiseki checkout: the chart, plus proof
+// that the directory is this source tree and not any directory that happens to
+// contain a chart. A bare go.mod is not proof — an unrelated Go module with a
+// copied chart would satisfy it — so the module path has to match.
 func isCheckout(dir string) bool {
 	if !isChart(filepath.Join(dir, chartRel)) {
 		return false
 	}
-	for _, marker := range []string{".git", "go.mod"} {
-		if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
-			return true
+	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		return true
+	}
+	return moduleIsKiseki(filepath.Join(dir, "go.mod"))
+}
+
+func moduleIsKiseki(gomod string) bool {
+	data, err := os.ReadFile(gomod)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "module ") {
+			continue
 		}
+		path := strings.TrimSpace(strings.TrimPrefix(line, "module "))
+		return strings.HasSuffix(path, "/kiseki")
 	}
 	return false
 }

@@ -32,13 +32,35 @@ func runExample(args []string, out, errw io.Writer) int {
 		return 0
 	}
 
-	if dir := filepath.Dir(*path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			fmt.Fprintf(errw, "kiseki: %v\n", err)
-			return 1
-		}
+	dir := filepath.Dir(*path)
+	if dir == "" {
+		dir = "."
 	}
-	if err := os.WriteFile(*path, []byte(exampleYAML), 0o644); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		fmt.Fprintf(errw, "kiseki: %v\n", err)
+		return 1
+	}
+
+	// Write next to the target and publish only after the render check: a values
+	// file helm rejects must not replace whatever the user already had there.
+	tmp, err := os.CreateTemp(dir, ".kiseki-example-*.yaml")
+	if err != nil {
+		fmt.Fprintf(errw, "kiseki: %v\n", err)
+		return 1
+	}
+	defer os.Remove(tmp.Name()) // no-op once the rename succeeds
+
+	if _, err := tmp.WriteString(exampleYAML); err != nil {
+		tmp.Close()
+		fmt.Fprintf(errw, "kiseki: %v\n", err)
+		return 1
+	}
+	if err := tmp.Chmod(0o644); err != nil {
+		tmp.Close()
+		fmt.Fprintf(errw, "kiseki: %v\n", err)
+		return 1
+	}
+	if err := tmp.Close(); err != nil {
 		fmt.Fprintf(errw, "kiseki: %v\n", err)
 		return 1
 	}
@@ -48,8 +70,13 @@ func runExample(args []string, out, errw io.Writer) int {
 	// the check silently.
 	if _, err := exec.LookPath("helm"); err != nil {
 		fmt.Fprintln(errw, "kiseki: helm not found on PATH, skipping the render check")
-	} else if code := renderExample(*path, errw); code != 0 {
+	} else if code := renderExample(tmp.Name(), errw); code != 0 {
 		return code
+	}
+
+	if err := os.Rename(tmp.Name(), *path); err != nil {
+		fmt.Fprintf(errw, "kiseki: %v\n", err)
+		return 1
 	}
 
 	fmt.Fprintf(out, "Wrote %s\n", *path)
@@ -57,9 +84,9 @@ func runExample(args []string, out, errw io.Writer) int {
 	return 0
 }
 
-// renderExample templates the written file against the chart. Helm's own output
-// is held back on success and printed on failure, where it explains more than a
-// summary line can.
+// renderExample templates the written file against the chart. Both streams are
+// captured so a failure reads in the order helm produced it, and nothing is
+// printed when the file is good.
 func renderExample(path string, errw io.Writer) int {
 	chart, err := repo.ChartDir()
 	if err != nil {
@@ -70,7 +97,7 @@ func renderExample(path string, errw io.Writer) int {
 	cmd := exec.Command("helm", "template", "kiseki-example", chart,
 		"--set", "ssh.authorizedKey=example", "-f", path)
 	var helmOut bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &helmOut, errw
+	cmd.Stdout, cmd.Stderr = &helmOut, &helmOut
 
 	if err := cmd.Run(); err != nil {
 		fmt.Fprintf(errw, "kiseki: generated file does not render: %s\n", path)

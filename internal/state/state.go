@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -26,17 +27,25 @@ type Env struct {
 	Kubeconfig string // file the context came from, empty when it was the default
 }
 
-// Root is $XDG_STATE_HOME/kiseki, ~/.local/state/kiseki by default.
-func Root() string {
-	if v := os.Getenv("XDG_STATE_HOME"); v != "" {
-		return filepath.Join(v, "kiseki")
+// Root is $XDG_STATE_HOME/kiseki, ~/.local/state/kiseki by default. It returns
+// an error rather than an empty string: filepath.Join("", name) yields a
+// relative path, and reading the working directory instead of the state root
+// would turn "no home" into bogus rows instead of a failed command.
+func Root() (string, error) {
+	if v := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); v != "" {
+		return filepath.Join(v, "kiseki"), nil
 	}
 	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
+	if err != nil || home == "" {
+		return "", errors.New("cannot locate the state directory: set XDG_STATE_HOME or HOME")
 	}
-	return filepath.Join(home, ".local", "state", "kiseki")
+	return filepath.Join(home, ".local", "state", "kiseki"), nil
 }
+
+// envName is the naming rule `create` enforces. Directories that do not match
+// are not environments: `Namespace()` would turn them into a release name that
+// was never installed, and `list` would render them as "no pods".
+var envName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?$`)
 
 // Namespace is where the chart was installed, and the release name.
 func (e Env) Namespace() string { return "kiseki-" + e.Name }
@@ -46,13 +55,22 @@ func (e Env) SSHAlias() string { return "kiseki-" + e.Name }
 
 // Load reads one environment.
 func Load(name string) (Env, error) {
-	return load(filepath.Join(Root(), name))
+	root, err := Root()
+	if err != nil {
+		return Env{}, err
+	}
+	return load(filepath.Join(root, name))
 }
 
 // LoadAll reads every environment, sorted by name so `list` output is stable.
 // A missing state root is not an error: it means nothing has been created yet.
 func LoadAll() ([]Env, error) {
-	entries, err := os.ReadDir(Root())
+	root, err := Root()
+	if err != nil {
+		return nil, err
+	}
+
+	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -62,10 +80,10 @@ func LoadAll() ([]Env, error) {
 
 	envs := make([]Env, 0, len(entries))
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !entry.IsDir() || !envName.MatchString(entry.Name()) {
 			continue
 		}
-		env, err := load(filepath.Join(Root(), entry.Name()))
+		env, err := load(filepath.Join(root, entry.Name()))
 		if err != nil {
 			if errors.Is(err, ErrNotEnvironment) {
 				continue
@@ -77,11 +95,12 @@ func LoadAll() ([]Env, error) {
 	return envs, nil
 }
 
-// load reads one state directory. `create` writes `port` and `context` in one
-// block, and both are required: a directory holding one but not the other is an
-// interrupted create, not an environment. Such a row would advertise an empty
-// context, and `--context ""` silently means "whatever the current context is",
-// i.e. the wrong cluster.
+// load reads one state directory. `create` writes `port` and `context`
+// separately, so a directory holding one but not the other is an interrupted
+// create, not an environment: such a row would advertise an empty context, and
+// `--context ""` silently means "whatever the current context is" — the wrong
+// cluster. `url` and `kubeconfig` are optional, and their absence is meaningful:
+// no `kubeconfig` means the context came from the default file.
 func load(dir string) (Env, error) {
 	port, err := readPort(dir)
 	if err != nil {
