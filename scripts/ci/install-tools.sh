@@ -22,18 +22,25 @@ HELM_VERSION=v3.22.1
 HELM_SHA256=896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea
 JUST_VERSION=1.42.4
 JUST_SHA256=678efc1cfbd5fa5a88375daa7e2f3864a049d6d63a0296df925a2ae5f516cb56
+# Go builds the CLI. The version is pinned because client-go's release train
+# requires a matching toolchain (v0.37 needs 1.26), and because a runner that
+# silently gets a newer Go is a runner nobody has tested.
+GO_VERSION=go1.26.10
+GO_SHA256=ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5
 
 with_docker=0
+with_go=0
 bindir=/usr/local/bin
 while [[ $# -gt 0 ]]; do
   case "$1" in
   --docker) with_docker=1 ;;
+  --go) with_go=1 ;;
   --bindir)
     bindir="${2:?--bindir needs a directory}"
     shift
     ;;
   *)
-    echo "usage: $0 [--docker] [--bindir DIR]" >&2
+    echo "usage: $0 [--docker] [--go] [--bindir DIR]" >&2
     exit 1
     ;;
   esac
@@ -78,8 +85,23 @@ if [[ "$with_docker" -eq 1 ]]; then
   "$bindir/kind" version
 fi
 
+if [[ "$with_go" -eq 1 ]]; then
+  # Go expects its tree at a fixed root: the binary resolves GOROOT from its own
+  # location, so installing only the executable would point it at a tree that is
+  # not there (or at whatever /usr/local/go happened to hold).
+  fetch_verified "https://go.dev/dl/${GO_VERSION}.linux-amd64.tar.gz" \
+    "$work/go.tgz" "$GO_SHA256"
+  rm -rf /usr/local/go
+  tar -xzf "$work/go.tgz" -C /usr/local
+  ln -sfn /usr/local/go/bin/go "$bindir/go"
+  ln -sfn /usr/local/go/bin/gofmt "$bindir/gofmt"
+fi
+
 # Absolute paths: the point of the log line is what was installed, not whatever
 # happens to be first on PATH.
 "$bindir/just" --version
 "$bindir/kubectl" version --client
 "$bindir/helm" version --short
+if [[ "$with_go" -eq 1 ]]; then
+  "$bindir/go" version
+fi

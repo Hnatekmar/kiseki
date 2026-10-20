@@ -35,6 +35,23 @@ func TestExampleMatchesCommittedFile(t *testing.T) {
 	}
 }
 
+// The embedded file is the source of the output, so a change to example.yaml
+// must reach `kiseki example` — that is what //go:embed buys over a constant in
+// a string literal nobody lints.
+func TestExampleMatchesEmbeddedFile(t *testing.T) {
+	root, err := repo.Root()
+	if err != nil {
+		t.Fatalf("repo root: %v", err)
+	}
+	onDisk, err := os.ReadFile(filepath.Join(root, "internal", "cli", "example.yaml"))
+	if err != nil {
+		t.Fatalf("read example.yaml: %v", err)
+	}
+	if exampleYAML != string(onDisk) {
+		t.Fatal("embedded example differs from internal/cli/example.yaml")
+	}
+}
+
 func TestExampleWritesFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nested", "extraSVC.yaml")
@@ -56,12 +73,30 @@ func TestExampleWritesFile(t *testing.T) {
 	}
 }
 
+// The equals form is what people type after reading `--output`.
+func TestExampleAcceptsEqualsForm(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "extraSVC.yaml")
+
+	var out, errw bytes.Buffer
+	if code := runExample([]string{"--output=" + path}, &out, &errw); code != 0 {
+		t.Fatalf("--output=FILE exited %d: %s", code, errw.String())
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("file not written: %v", err)
+	}
+
+	var out2, errw2 bytes.Buffer
+	if code := runExample([]string{"-o", path + ".2"}, &out2, &errw2); code != 0 {
+		t.Fatalf("-o FILE exited %d: %s", code, errw2.String())
+	}
+}
+
 func TestExampleRejectsUnknownArgument(t *testing.T) {
 	var out, errw bytes.Buffer
 	if code := runExample([]string{"--nope"}, &out, &errw); code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
-	if !strings.Contains(errw.String(), "Unknown argument: --nope") {
+	if !strings.Contains(errw.String(), "nope") {
 		t.Fatalf("stderr = %q", errw.String())
 	}
 }

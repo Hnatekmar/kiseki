@@ -26,13 +26,20 @@ with `socat`; Go's `net.Dial` and `io.Copy` do the same without it.
 `port_in_use()` shells out to `ss`, which is why `ci.yml` installs `iproute2`;
 a bind attempt is both cheaper and free of that dependency.
 
-The binary keeps shelling out to `kubectl` and `helm` rather than adopting
-`client-go`. There are five call sites, and the alternative drags in a large
-dependency tree plus its own version skew against the cluster. The only
-non-stdlib dependency is `yaml.v3`, used where the CLI has to emit chart
-values. No `cobra`: the surface is five subcommands and one heredoc of help, so
-`flag` with a `FlagSet` per subcommand is enough, and `--json` becomes a struct
-tag instead of a second escaper.
+The binary reads the cluster through `client-go`, not `kubectl -o json`. The
+first draft shelled out to kubectl to keep the dependency tree small; review
+overturned it on three concrete failures. A typed client takes a context, so a
+context whose API server accepts the connection and never answers can no longer
+hang `list` on one row. A JSON decode failure stops being indistinguishable from
+a dead cluster. And pinning the kubeconfig becomes a field on the loading rules
+instead of an environment variable spliced into a child process, where it
+duplicated whatever `KUBECONFIG` the caller already had. `helm` stays a child
+process — it is a release tool, not an API client — and so do the kubectl calls
+inside the Bash `create`/`destroy` paths, which keep working until they are
+ported. Dependencies are `client-go` with `api` and `apimachinery`, plus
+`yaml.v3` once `create` starts emitting chart values. No `cobra`: the surface is
+five subcommands, so `flag` with one `FlagSet` per subcommand is enough, and
+`--json` becomes a struct tag instead of a second escaper.
 
 The chart is not embedded. `CHART_DIR` is currently resolved relative to the
 script, and `install.sh` deliberately symlinks into the checkout so edits are
@@ -55,10 +62,11 @@ Consequences:
   and make them tests. The jsonpath version cannot be tested this way, so the
   fixtures are the port's first payoff.
 - The `syntax` recipe becomes `go vet` and `go build`, and the mgmt CI lane
-  needs a Go toolchain. The CLI validation assertions in `just lint` move into
-  table tests over the pure validators, which is what lets that lane stop
-  installing `kubectl`, `helm` and `ssh` just to make its own assertions
-  meaningful.
+  installs Go through `scripts/ci/install-tools.sh --go`, pinned by version and
+  sha256 like the rest of the toolchain rather than through an unpinned action.
+  The CLI validation assertions in `just lint` move into table tests over the
+  pure validators, which is what lets that lane stop installing `kubectl`, `helm`
+  and `ssh` just to make its own assertions meaningful.
 - `proxy` runs as an SSH `ProxyCommand` on every connection, so its startup
   cost is user-visible. A Go binary starts in single-digit milliseconds, faster
   than sourcing six files and starting three subshells.

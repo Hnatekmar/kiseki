@@ -23,17 +23,24 @@ This repository provides Kubernetes-based development environments using a Helm 
 
 ### Go CLI
 - Code lives in `cmd/kiseki` and `internal/`; `internal/cli` owns the command
-  surface, `internal/kube` owns the `kubectl` child process, `internal/state`
-  owns the state directory, `internal/repo` locates the checkout.
+  surface, `internal/kube` owns cluster reads, `internal/state` owns the state
+  directory, `internal/repo` locates the checkout.
 - `go vet ./...` and `go test ./...` must pass (`just test-go`).
-- Dependencies stay minimal: standard library plus `yaml.v3` for chart values.
-  A new dependency needs a reason in the commit message, not a convenience.
-- Cluster access goes through `kubectl` and `helm` as child processes, not
-  `client-go`: keep it that way unless an ADR says otherwise.
-- Anything that shells out must be tested through a fake on `PATH` (see
-  `internal/kube/kube_test.go`), so the suite needs no cluster.
-- `examples/extraSVC.yaml` is generated. A test diffs the generator against it;
-  change both in the same commit.
+- Dependencies stay minimal: `client-go` for cluster reads, `yaml.v3` for chart
+  values. A new dependency needs a reason in the commit message, not a
+  convenience, and its version must match the `kubectl` pinned in
+  `scripts/ci/install-tools.sh`.
+- Cluster reads go through `client-go` in `internal/kube`; do not add a second way
+  to read the cluster. `helm`, and the Bash `create`/`destroy` paths the binary
+  delegates to, stay child processes.
+- Flags are parsed with `flag`, one `FlagSet` per subcommand (`newFlagSet` in
+  `internal/cli/root.go`), not by hand and not with a framework.
+- Anything that talks to a cluster or a binary must be testable without one: pass
+  a `kubernetes.Interface` (see `internal/kube/kube_test.go`) or stub the package
+  variable (see `phase` in `internal/cli/list.go`).
+- `examples/extraSVC.yaml` is generated from `internal/cli/example.yaml`, which is
+  embedded. A test diffs the generator against the committed example; change both
+  in the same commit.
 
 ### File Structure
 - Chart lives in `charts/kiseki/`

@@ -3,12 +3,18 @@
 package state
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 )
+
+// ErrNotEnvironment marks a directory under the state root that `create` never
+// finished writing. It is a sentinel rather than a formatted string so callers
+// can use errors.Is and stay correct once the message is wrapped.
+var ErrNotEnvironment = errors.New("not an environment")
 
 // Env is one created environment, as recorded on disk at create time.
 type Env struct {
@@ -38,8 +44,7 @@ func (e Env) Namespace() string { return "kiseki-" + e.Name }
 // SSHAlias is the Host block written into ~/.ssh/config.d/kiseki.
 func (e Env) SSHAlias() string { return "kiseki-" + e.Name }
 
-// Load reads one environment. A state directory without a port file is not an
-// environment and reports ErrNotEnvironment.
+// Load reads one environment.
 func Load(name string) (Env, error) {
 	return load(filepath.Join(Root(), name))
 }
@@ -62,7 +67,7 @@ func LoadAll() ([]Env, error) {
 		}
 		env, err := load(filepath.Join(Root(), entry.Name()))
 		if err != nil {
-			if IsNotEnvironment(err) {
+			if errors.Is(err, ErrNotEnvironment) {
 				continue
 			}
 			return nil, err
@@ -72,62 +77,76 @@ func LoadAll() ([]Env, error) {
 	return envs, nil
 }
 
+// load reads one state directory. `create` writes `port` and `context` in one
+// block, and both are required: a directory holding one but not the other is an
+// interrupted create, not an environment. Such a row would advertise an empty
+// context, and `--context ""` silently means "whatever the current context is",
+// i.e. the wrong cluster.
 func load(dir string) (Env, error) {
-	portText, err := readFile(filepath.Join(dir, "port"))
+	port, err := readPort(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return Env{}, fmt.Errorf("%s: %w", dir, ErrNotEnvironment)
-		}
 		return Env{}, err
 	}
-	port, err := strconv.Atoi(strings.TrimSpace(portText))
+	contextName, err := readContext(dir)
 	if err != nil {
-		return Env{}, fmt.Errorf("%s/port: not a port number", dir)
-	}
-
-	ctx, err := readFile(filepath.Join(dir, "context"))
-	if err != nil && !os.IsNotExist(err) {
 		return Env{}, err
 	}
 
-	env := Env{
-		Name:    filepath.Base(dir),
-		Dir:     dir,
-		Context: strings.TrimSpace(ctx),
-		Port:    port,
+	url, err := readStateFile(filepath.Join(dir, "url"), false)
+	if err != nil {
+		return Env{}, err
 	}
-
-	if url, err := readFile(filepath.Join(dir, "url")); err == nil {
-		env.URL = strings.TrimSpace(url)
-	} else if !os.IsNotExist(err) {
+	kubeconfig, err := readStateFile(filepath.Join(dir, "kubeconfig"), false)
+	if err != nil {
 		return Env{}, err
 	}
 
-	if kubeconfig, err := readFile(filepath.Join(dir, "kubeconfig")); err == nil {
-		env.Kubeconfig = strings.TrimSpace(kubeconfig)
-	} else if !os.IsNotExist(err) {
-		return Env{}, err
-	}
-
-	return env, nil
+	return Env{
+		Name:       filepath.Base(dir),
+		Dir:        dir,
+		Context:    contextName,
+		Port:       port,
+		URL:        url,
+		Kubeconfig: kubeconfig,
+	}, nil
 }
 
-// ErrNotEnvironment marks a directory that exists under the state root but was
-// never completed by `create`.
-var ErrNotEnvironment = fmt.Errorf("not an environment")
-
-// IsNotEnvironment reports whether err came from a directory that is not an
-// environment.
-func IsNotEnvironment(err error) bool {
-	return err != nil && strings.HasSuffix(err.Error(), ErrNotEnvironment.Error())
+func readPort(dir string) (int, error) {
+	text, err := readStateFile(filepath.Join(dir, "port"), true)
+	if err != nil {
+		return 0, err
+	}
+	port, err := strconv.Atoi(text)
+	if err != nil {
+		return 0, fmt.Errorf("%s/port: %w", dir, err)
+	}
+	return port, nil
 }
 
-// readFile reads a whole state file. State files are one short value each, and
-// a single trailing newline is stripped by the callers that care.
-func readFile(path string) (string, error) {
-	data, err := os.ReadFile(path)
+func readContext(dir string) (string, error) {
+	text, err := readStateFile(filepath.Join(dir, "context"), true)
 	if err != nil {
 		return "", err
 	}
-	return string(data), nil
+	if text == "" {
+		return "", fmt.Errorf("%s: empty context file: %w", dir, ErrNotEnvironment)
+	}
+	return text, nil
+}
+
+// readStateFile reads one short state file. When required, an absent file is
+// ErrNotEnvironment; when optional, it is empty. Any other failure is wrapped so
+// the caller keeps *os.PathError identity.
+func readStateFile(path string, required bool) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			if required {
+				return "", fmt.Errorf("%s: %w", path, ErrNotEnvironment)
+			}
+			return "", nil
+		}
+		return "", fmt.Errorf("%s: %w", path, err)
+	}
+	return strings.TrimSpace(string(data)), nil
 }

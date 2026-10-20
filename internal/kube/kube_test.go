@@ -1,93 +1,120 @@
 package kube
 
 import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
-// fakeKubectl puts a kubectl on PATH that prints stdout, then stderr, then exits
-// with code. The CLI shells out to kubectl by design, so the fake is the seam.
-func fakeKubectl(t *testing.T, stdout, stderr string, code int) {
-	t.Helper()
-	dir := t.TempDir()
-	script := "#!/bin/sh\ncat <<'OUT'\n" + stdout + "\nOUT\ncat >&2 <<'ERR'\n" + stderr + "\nERR\nexit " + strconv.Itoa(code) + "\n"
-	path := filepath.Join(dir, "kubectl")
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake kubectl: %v", err)
-	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-}
-
-const runningPod = `{"items":[{"metadata":{"name":"kiseki-x-abc"},"status":{"phase":"Running"}}]}`
-const noPods = `{"items":[]}`
-
-func TestPhaseRunning(t *testing.T) {
-	fakeKubectl(t, runningPod, "", 0)
-	if got := Phase("kind-test", "kiseki-x", ""); got != "Running" {
-		t.Fatalf("Phase = %q, want Running", got)
+func pod(name string, phase corev1.PodPhase, instance string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "kiseki-x",
+			Labels:    map[string]string{"app.kubernetes.io/instance": instance},
+		},
+		Status: corev1.PodStatus{Phase: phase},
 	}
 }
 
-func TestPhaseNoPods(t *testing.T) {
-	fakeKubectl(t, noPods, "", 0)
-	if got := Phase("kind-test", "kiseki-x", ""); got != "no pods" {
-		t.Fatalf("Phase = %q, want %q", got, "no pods")
+func TestListPodsFiltersBySelector(t *testing.T) {
+	cs := fake.NewClientset(
+		pod("mine", corev1.PodRunning, "kiseki-x"),
+		pod("other", corev1.PodRunning, "kiseki-y"),
+	)
+
+	pods, err := listPods(context.Background(), cs, "kiseki-x", "app.kubernetes.io/instance=kiseki-x")
+	if err != nil {
+		t.Fatalf("listPods: %v", err)
+	}
+	if len(pods) != 1 || pods[0].Name != "mine" {
+		t.Fatalf("pods = %+v, want only the pod for kiseki-x", pods)
 	}
 }
 
-// A context that does not exist must read as unreachable, not as an empty
-// environment: the two mean opposite things to whoever is looking at the list.
-func TestPhaseUnreachable(t *testing.T) {
-	fakeKubectl(t, "", `error: context "gone" does not exist`, 1)
-	if got := Phase("gone", "kiseki-x", ""); got != "unreachable" {
+func TestPhaseWord(t *testing.T) {
+	cases := []struct {
+		name string
+		pods []Pod
+		err  error
+		want string
+	}{
+		{"first pod's phase", []Pod{{Name: "a", Phase: "Pending"}}, nil, "Pending"},
+		{"no pods", nil, nil, "no pods"},
+		{"unreachable", nil, errors.New("dial tcp: connection refused"), "unreachable"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := phaseWord(tc.pods, tc.err); got != tc.want {
+				t.Fatalf("phaseWord = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// An API server that accepts the connection and never answers used to hang
+// `kiseki list` until kubectl gave up, so every environment after it stayed
+// unprinted. The deadline is the fix; this test is the proof.
+func TestPhaseTimesOutOnAHangingServer(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits out the timeout")
+	}
+
+	blocked := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-blocked:
+		}
+	}))
+	defer srv.Close()
+	defer close(blocked)
+
+	kubeconfig := writeKubeconfig(t, srv.URL)
+
+	start := time.Now()
+	got := Phase("hang", "kiseki-x", kubeconfig)
+	elapsed := time.Since(start)
+
+	if got != "unreachable" {
 		t.Fatalf("Phase = %q, want unreachable", got)
 	}
-}
-
-func TestGetPodsNames(t *testing.T) {
-	fakeKubectl(t, runningPod, "", 0)
-	pods, err := GetPods("kind-test", "kiseki-x", "app.kubernetes.io/instance=kiseki-x", "")
-	if err != nil {
-		t.Fatalf("GetPods: %v", err)
-	}
-	if len(pods) != 1 || pods[0].Name != "kiseki-x-abc" {
-		t.Fatalf("pods = %+v", pods)
+	if elapsed > Timeout+5*time.Second {
+		t.Fatalf("Phase took %s, want it bounded by the %s deadline", elapsed, Timeout)
 	}
 }
 
-// The kubeconfig file must reach the child process: a context can live in any
-// file on KUBECONFIG, and `list` runs with whatever the caller exported.
-func TestGetPodsForwardsKubeconfig(t *testing.T) {
-	dir := t.TempDir()
-	script := `#!/bin/sh
-if [ "$KUBECONFIG" = "` + dir + `/kubeconfig" ]; then
-  echo '{"items":[{"metadata":{"name":"p"},"status":{"phase":"Forwarded"}}]}'
-  exit 0
-fi
-echo "wrong KUBECONFIG: $KUBECONFIG" >&2
-exit 3
+// writeKubeconfig writes a one-context kubeconfig pointing at server.
+func writeKubeconfig(t *testing.T, server string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "kubeconfig")
+	body := `apiVersion: v1
+kind: Config
+clusters:
+- name: hang
+  cluster:
+    server: ` + server + `
+contexts:
+- name: hang
+  context:
+    cluster: hang
+    user: hang
+current-context: hang
+users:
+- name: hang
+  user: {}
 `
-	path := filepath.Join(dir, "kubectl")
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake kubectl: %v", err)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write kubeconfig: %v", err)
 	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	if got := Phase("ctx", "ns", filepath.Join(dir, "kubeconfig")); got != "Forwarded" {
-		t.Fatalf("Phase = %q, want Forwarded (kubeconfig was not forwarded)", got)
-	}
-}
-
-// kubectl's first stderr line is the cause; the rest are hints.
-func TestGetPodsReportsFirstErrorLine(t *testing.T) {
-	fakeKubectl(t, "", "error: the server is unreachable\nhint: check your VPN", 1)
-	_, err := GetPods("ctx", "ns", "sel", "")
-	if err == nil {
-		t.Fatal("expected an error")
-	}
-	if got := err.Error(); got != "error: the server is unreachable" {
-		t.Fatalf("error = %q", got)
-	}
+	return path
 }

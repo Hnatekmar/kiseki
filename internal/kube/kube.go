@@ -1,18 +1,31 @@
-// Package kube shells out to kubectl.
+// Package kube reads cluster state through client-go.
 //
-// The CLI keeps kubectl and helm as child processes rather than adopting
-// client-go: five call sites do not justify the dependency tree or the version
-// skew, and the contract stays the one users already have on their PATH.
+// Reads go through the typed client rather than `kubectl -o json`. Three reasons,
+// in order of weight: the client takes a context, so an API server that accepts
+// a connection and never answers cannot hang `kiseki list`; it removes kubectl
+// and its JSON formatting from the read path, so a parse failure is no longer
+// indistinguishable from a dead cluster; and pinning the kubeconfig file becomes
+// a field on the loading rules instead of an environment variable spliced into a
+// child process.
+//
+// Helm stays a child process. It is a release tool, not an API client, and the
+// Bash `create`/`destroy` paths still drive both helm and kubectl.
 package kube
 
 import (
-	"bytes"
-	"encoding/json"
+	"context"
 	"fmt"
-	"os"
-	"os/exec"
-	"strings"
+	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
 )
+
+// Timeout bounds one cluster question. It is deliberately short: `list` asks
+// once per environment, and a context behind a dead VPN should read as
+// unreachable in seconds rather than holding up the rows after it.
+const Timeout = 5 * time.Second
 
 // Pod is the part of a pod the CLI reports on.
 type Pod struct {
@@ -20,78 +33,72 @@ type Pod struct {
 	Phase string
 }
 
-// podList is the subset of `kubectl get pods -o json` the CLI needs. Field
-// selection beats a jsonpath template here: the Bash version encoded a record
-// format into the query and parsed it back with IFS splitting.
-type podList struct {
-	Items []struct {
-		Metadata struct {
-			Name string `json:"name"`
-		} `json:"metadata"`
-		Status struct {
-			Phase string `json:"phase"`
-		} `json:"status"`
-	} `json:"items"`
+// GetPods lists the pods matching selector in ns.
+func GetPods(ctx context.Context, contextName, ns, selector, kubeconfig string) ([]Pod, error) {
+	cs, err := client(contextName, kubeconfig)
+	if err != nil {
+		return nil, err
+	}
+	return listPods(ctx, cs, ns, selector)
 }
 
-// GetPods lists the pods matching selector in ns. kubeconfig, when set, pins the
-// call to the file the environment was created with: a context name alone is
-// ambiguous, and a ProxyCommand runs in a shell that inherited nothing.
-func GetPods(ctx, ns, selector, kubeconfig string) ([]Pod, error) {
-	out, err := kubectl(kubeconfig, "--context", ctx, "get", "pods", "-n", ns, "-l", selector, "-o", "json")
+// Phase is the word `kiseki list` prints for one environment. It never returns
+// an error: one unreachable context must not stop the listing.
+func Phase(contextName, ns, kubeconfig string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+	defer cancel()
+
+	pods, err := GetPods(ctx, contextName, ns, "app.kubernetes.io/instance="+ns, kubeconfig)
+	return phaseWord(pods, err)
+}
+
+// listPods takes a client, not a kubeconfig, so tests can pass client-go's fake
+// and run without a cluster.
+func listPods(ctx context.Context, cs kubernetes.Interface, ns, selector string) ([]Pod, error) {
+	list, err := cs.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err != nil {
 		return nil, err
 	}
 
-	var list podList
-	if err := json.Unmarshal(out, &list); err != nil {
-		return nil, fmt.Errorf("cannot parse kubectl output: %w", err)
-	}
-
 	pods := make([]Pod, 0, len(list.Items))
 	for _, item := range list.Items {
-		pods = append(pods, Pod{Name: item.Metadata.Name, Phase: item.Status.Phase})
+		pods = append(pods, Pod{Name: item.Name, Phase: string(item.Status.Phase)})
 	}
 	return pods, nil
 }
 
-// Phase is the single word `kiseki list` prints: the first pod's phase, "no
-// pods" when the namespace holds none, or "unreachable" when the context cannot
-// be queried.
-func Phase(ctx, ns, kubeconfig string) string {
-	pods, err := GetPods(ctx, ns, "app.kubernetes.io/instance="+ns, kubeconfig)
-	if err != nil {
+// phaseWord is the status column: the first pod's phase, "no pods" when the
+// namespace holds none, or "unreachable" for any failure.
+func phaseWord(pods []Pod, err error) string {
+	switch {
+	case err != nil:
 		return "unreachable"
-	}
-	if len(pods) == 0 {
+	case len(pods) == 0:
 		return "no pods"
+	default:
+		return pods[0].Phase
 	}
-	return pods[0].Phase
 }
 
-// kubectl runs one kubectl command and returns stdout. The first line of stderr
-// is what a caller reports: kubectl's later lines are hints that bury the cause.
-func kubectl(kubeconfig string, args ...string) ([]byte, error) {
-	cmd := exec.Command("kubectl", args...)
+// client is pinned to the kubeconfig the environment was created with: a context
+// name alone is ambiguous, because it can live in any file named by KUBECONFIG.
+func client(contextName, kubeconfig string) (kubernetes.Interface, error) {
+	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if kubeconfig != "" {
-		// Append rather than replace: kubectl also reads the rest of the
-		// environment, and KUBECONFIG is a list on many machines.
-		cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig)
+		rules.ExplicitPath = kubeconfig
 	}
 
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		rules,
+		&clientcmd.ConfigOverrides{CurrentContext: contextName},
+	).ClientConfig()
 	if err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		// kubectl prefixes hints with 'E' or 'W'; the cause is the first line.
-		if idx := strings.IndexByte(msg, '\n'); idx >= 0 {
-			msg = msg[:idx]
-		}
-		if msg == "" {
-			return nil, err
-		}
-		return nil, fmt.Errorf("%s", msg)
+		return nil, fmt.Errorf("context %q: %w", contextName, err)
 	}
-	return out, nil
+
+	cs, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("context %q: %w", contextName, err)
+	}
+	return cs, nil
 }

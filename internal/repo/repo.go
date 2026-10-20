@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const chartRel = "charts/kiseki"
@@ -27,7 +28,7 @@ func Root() (string, error) {
 
 	for _, start := range starts {
 		for dir := start; ; {
-			if isChart(filepath.Join(dir, chartRel)) {
+			if isCheckout(dir) {
 				return dir, nil
 			}
 			parent := filepath.Dir(dir)
@@ -42,7 +43,9 @@ func Root() (string, error) {
 
 // ChartDir is the Helm chart the CLI installs.
 func ChartDir() (string, error) {
-	if v := os.Getenv("KISEKI_CHART"); v != "" {
+	// Trimmed: a value written with $(cat file) or pasted from a terminal
+	// carries a newline, and an untrimmed path can never match a directory.
+	if v := strings.TrimSpace(os.Getenv("KISEKI_CHART")); v != "" {
 		abs, err := filepath.Abs(v)
 		if err != nil {
 			return "", err
@@ -67,10 +70,34 @@ func LegacyScript() (string, error) {
 		return "", err
 	}
 	path := filepath.Join(root, "scripts", "kiseki.sh")
-	if st, err := os.Stat(path); err != nil || st.IsDir() {
+	st, err := os.Stat(path)
+	if err != nil || !st.Mode().IsRegular() {
 		return "", fmt.Errorf("%s not found", path)
 	}
 	return path, nil
+}
+
+// IsExecutable reports whether path can be run directly. A checkout that lost
+// its mode bits still works through `bash path`, which is what delegate does.
+func IsExecutable(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && st.Mode().IsRegular() && st.Mode().Perm()&0o111 != 0
+}
+
+// isCheckout reports whether dir is a kiseki checkout: the chart, plus a marker
+// that says the directory is a source tree rather than any directory that
+// happens to contain a chart. Without the marker, `delegate` would happily run a
+// scripts/kiseki.sh found in whatever directory the binary was started from.
+func isCheckout(dir string) bool {
+	if !isChart(filepath.Join(dir, chartRel)) {
+		return false
+	}
+	for _, marker := range []string{".git", "go.mod"} {
+		if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func isChart(dir string) bool {

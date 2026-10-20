@@ -8,13 +8,27 @@ import (
 	"testing"
 )
 
-// threeEnvs lays out the state directory `list` reads and a kubectl that answers
-// for the first two environments and fails for the third.
-func threeEnvs(t *testing.T) string {
+// stubPhase answers the cluster question from a table, so `list` runs with no
+// cluster, no kubeconfig and no kubectl.
+func stubPhase(t *testing.T, answers map[string]string) {
+	t.Helper()
+	original := phase
+	t.Cleanup(func() { phase = original })
+	phase = func(contextName, _, _ string) string {
+		if word, ok := answers[contextName]; ok {
+			return word
+		}
+		return "unreachable"
+	}
+}
+
+// threeEnvs lays out the state directory `list` reads: two reachable
+// environments, one whose context is gone, a stray directory, and one that an
+// interrupted create left without a context file.
+func threeEnvs(t *testing.T) {
 	t.Helper()
 
-	root := t.TempDir()
-	stateRoot := filepath.Join(root, "state", "kiseki")
+	stateRoot := filepath.Join(t.TempDir(), "state", "kiseki")
 	for _, env := range []struct{ name, ctx, port, url string }{
 		{"alpha", "kind-kiseki-test-cluster", "2200", ""},
 		{"beta", "dev-k8s", "2201", "https://beta.dev-k8s.srv.example.com"},
@@ -30,28 +44,22 @@ func threeEnvs(t *testing.T) string {
 			write(t, filepath.Join(dir, "url"), env.url)
 		}
 	}
-	// A stray directory is not an environment and must not appear as a row.
+
+	// Not a directory create ever finished.
 	if err := os.MkdirAll(filepath.Join(stateRoot, ".stray"), 0o755); err != nil {
 		t.Fatalf("mkdir stray: %v", err)
 	}
-	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
-
-	scripts := t.TempDir()
-	script := `#!/bin/sh
-ns=""
-for a in "$@"; do case "$prev" in -n) ns="$a";; esac; prev="$a"; done
-case "$ns" in
-kiseki-alpha) echo '{"items":[{"metadata":{"name":"pod-1"},"status":{"phase":"Running"}}]}' ;;
-kiseki-beta)  echo '{"items":[{"metadata":{"name":"pod-1"},"status":{"phase":"Pending"}}]}' ;;
-*)            echo 'error: context does not exist' >&2; exit 1 ;;
-esac
-`
-	if err := os.WriteFile(filepath.Join(scripts, "kubectl"), []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake kubectl: %v", err)
+	half := filepath.Join(stateRoot, "half")
+	if err := os.MkdirAll(half, 0o755); err != nil {
+		t.Fatalf("mkdir half: %v", err)
 	}
-	t.Setenv("PATH", scripts+string(os.PathListSeparator)+os.Getenv("PATH"))
+	write(t, filepath.Join(half, "port"), "2203")
 
-	return root
+	t.Setenv("XDG_STATE_HOME", filepath.Dir(stateRoot))
+	stubPhase(t, map[string]string{
+		"kind-kiseki-test-cluster": "Running",
+		"dev-k8s":                  "Pending",
+	})
 }
 
 func write(t *testing.T, path, content string) {
@@ -62,7 +70,8 @@ func write(t *testing.T, path, content string) {
 }
 
 // The table is the shape users see. It is asserted whole, because column drift
-// is invisible in a passing build and obvious in a terminal.
+// is invisible in a passing build and obvious in a terminal. `half` is absent on
+// purpose: a port without a context is an interrupted create, not an environment.
 func TestListTable(t *testing.T) {
 	threeEnvs(t)
 
@@ -104,6 +113,7 @@ func TestListJSON(t *testing.T) {
 
 func TestListEmpty(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "nothing"))
+	stubPhase(t, nil)
 
 	var out, errw bytes.Buffer
 	if code := runList(nil, &out, &errw); code != 0 {
@@ -127,7 +137,7 @@ func TestListRejectsArguments(t *testing.T) {
 	if code := runList([]string{"--nope"}, &out, &errw); code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
-	if !strings.Contains(errw.String(), "Unknown flag: --nope") {
+	if !strings.Contains(errw.String(), "nope") {
 		t.Fatalf("stderr = %q", errw.String())
 	}
 
@@ -140,8 +150,16 @@ func TestListRejectsArguments(t *testing.T) {
 	}
 }
 
-// A state directory whose port file is not a number is corrupt state, not an
-// environment with a zero port.
+// Help is not a failure.
+func TestListHelp(t *testing.T) {
+	var out, errw bytes.Buffer
+	if code := runList([]string{"-h"}, &out, &errw); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+}
+
+// A port file that is not a number is corrupt state, not an environment with a
+// zero port.
 func TestListRejectsCorruptPort(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "state", "kiseki", "broken")
@@ -156,7 +174,7 @@ func TestListRejectsCorruptPort(t *testing.T) {
 	if code := runList(nil, &out, &errw); code != 1 {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
-	if !strings.Contains(errw.String(), "not a port number") {
+	if !strings.Contains(errw.String(), "port") {
 		t.Fatalf("stderr = %q", errw.String())
 	}
 }

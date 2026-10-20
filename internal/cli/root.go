@@ -3,6 +3,7 @@ package cli
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -86,13 +87,28 @@ func Run(args []string, out, errw io.Writer, in io.Reader) int {
 }
 
 func delegate(sub string, args []string, out, errw io.Writer, in io.Reader) int {
+	if sub == "proxy" && len(args) == 0 {
+		// The alias arrives from `ProxyCommand ... proxy %h`, so an empty one
+		// means the generated SSH config is broken, not that the user forgot it.
+		fmt.Fprintln(errw, "usage: kiseki proxy <alias>")
+		return 1
+	}
+
 	script, err := repo.LegacyScript()
 	if err != nil {
 		fmt.Fprintf(errw, "kiseki: %s is not ported yet, and the legacy script is missing: %v\n", sub, err)
 		return 1
 	}
 
-	cmd := exec.Command(script, append([]string{sub}, args...)...)
+	// Run the script the way a user would: directly when the mode bits allow it,
+	// through bash when they do not.
+	argv := append([]string{sub}, args...)
+	prog := script
+	if !repo.IsExecutable(script) {
+		prog = "bash"
+		argv = append([]string{script}, argv...)
+	}
+	cmd := exec.Command(prog, argv...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = in, out, errw
 	cmd.Env = os.Environ()
 
@@ -105,4 +121,30 @@ func delegate(sub string, args []string, out, errw io.Writer, in io.Reader) int 
 		return 1
 	}
 	return 0
+}
+
+// newFlagSet is one subcommand's flags: a per-command set whose output goes to
+// the caller's stderr, so a parse error becomes a returned code instead of an
+// exit from inside the flag package.
+func newFlagSet(name, usage string, errw io.Writer) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(errw)
+	fs.Usage = func() { fmt.Fprintf(errw, "usage: kiseki %s %s\n", name, usage) }
+	return fs
+}
+
+// parseFlags parses args and reports the exit code to use when the command must
+// stop. Help is not a failure: `kiseki list -h` exits 0.
+func parseFlags(fs *flag.FlagSet, args []string, errw io.Writer) (code int, ok bool) {
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0, false
+		}
+		return 1, false
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(errw, "kiseki: Unexpected argument: %s\n", fs.Arg(0))
+		return 1, false
+	}
+	return 0, true
 }

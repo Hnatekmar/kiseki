@@ -10,6 +10,10 @@ import (
 	"forgejo.srv.hnatekmar.dev/hnatekmar/kiseki/internal/state"
 )
 
+// phase is the cluster question each row asks. It is a variable so tests can
+// answer it without a cluster; production always uses kube.Phase.
+var phase = kube.Phase
+
 // envJSON is the --json shape of one row. The field order matches the Bash
 // emitter byte for byte, and it is the only place the shape is written down.
 type envJSON struct {
@@ -22,18 +26,10 @@ type envJSON struct {
 }
 
 func runList(args []string, out, errw io.Writer) int {
-	jsonMode := false
-	for _, arg := range args {
-		switch {
-		case arg == "--json":
-			jsonMode = true
-		case strings.HasPrefix(arg, "-"):
-			fmt.Fprintf(errw, "kiseki: Unknown flag: %s\n", arg)
-			return 1
-		default:
-			fmt.Fprintf(errw, "kiseki: Unexpected argument: %s\n", arg)
-			return 1
-		}
+	fs := newFlagSet("list", "[--json]", errw)
+	jsonMode := fs.Bool("json", false, "print one JSON array on stdout")
+	if code, ok := parseFlags(fs, args, errw); !ok {
+		return code
 	}
 
 	envs, err := state.LoadAll()
@@ -43,7 +39,7 @@ func runList(args []string, out, errw io.Writer) int {
 	}
 
 	if len(envs) == 0 {
-		if jsonMode {
+		if *jsonMode {
 			fmt.Fprintln(out, "[]")
 		} else {
 			fmt.Fprintln(out, "No environments found.")
@@ -61,12 +57,12 @@ func runList(args []string, out, errw io.Writer) int {
 			Context:   env.Context,
 			Port:      env.Port,
 			Namespace: env.Namespace(),
-			Phase:     kube.Phase(env.Context, env.Namespace(), env.Kubeconfig),
+			Phase:     phase(env.Context, env.Namespace(), env.Kubeconfig),
 			URL:       env.URL,
 		})
 	}
 
-	if jsonMode {
+	if *jsonMode {
 		return printJSON(out, errw, rows)
 	}
 
