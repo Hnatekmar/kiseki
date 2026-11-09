@@ -351,6 +351,11 @@ cmd_create() {
   # "violates PodSecurity" error that the rollout only reports as a timeout.
   run_quiet kubectl --context "$ctx" create namespace "$ns"
   log "  ✓ namespace $ns"
+  # Every environment is a client of the shared Graphiti agent-memory service.
+  # The NetworkPolicy in the graphiti namespace selects on this label, so it
+  # must be present before the pod starts talking to it.
+  run_quiet kubectl --context "$ctx" label namespace "$ns" \
+    hnatekmar.dev/graphiti-client=true --overwrite
   if [[ "$docker" -eq 1 ]]; then
     log "  PodSecurity: labeling $ns enforce=privileged for the dind sidecar"
     run_quiet kubectl --context "$ctx" label namespace "$ns" \
