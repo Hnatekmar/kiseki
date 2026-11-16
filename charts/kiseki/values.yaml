@@ -1,6 +1,17 @@
 image:
-  repository: fedora
-  tag: "42"
+  # Prebuilt base with the provisioning prerequisites already installed
+  # (openssh-server, zsh, git, rsync, curl, tar, findutils, python3, gcc, make,
+  # socat, docker-cli, procps-ng, hostname, iproute, which, lsof). Packages under
+  # hnatekmar/kiseki are anonymously
+  # pullable, so environments need no imagePullSecret.
+  #
+  # Falling back to `fedora` works: up.sh and dots install what they need, at the
+  # cost of Fedora mirror fetches on every start. Build the image with
+  # `just base-image`.
+  repository: forgejo.srv.hnatekmar.dev/hnatekmar/kiseki/base
+  # Immutable tag -- bump it whenever images/base is rebuilt. pullPolicy is
+  # IfNotPresent, so a reused tag leaves nodes on cached layers.
+  tag: "fedora45-2"
   pullPolicy: IfNotPresent
 
 resources:
@@ -27,6 +38,25 @@ tolerations:
 dots:
   enabled: true
   repo: https://github.com/Hnatekmar/dots.git
+
+  # Wall-clock cap on the bootstrap, in seconds. A stalled external fetch
+  # otherwise keeps the container from ever reaching sshd: the pod sits 0/1 and
+  # the only way in is `kubectl logs`. On timeout sshd starts anyway and the
+  # timeout is logged; the bootstrap is idempotent, so re-running
+  # `dots-bootstrap.sh` inside the environment resumes where it stopped.
+  timeout: 1200
+
+  # Shared download cache: mounted at `mountPath` and exported to the bootstrap
+  # as DOTS_CACHE_DIR. Without it every environment re-downloads ~1.2G of release
+  # assets; with it, only the first environment after a version bump touches the
+  # network. Requires the NFS export to exist, and is ignored when dots.enabled
+  # is false — the mount is a hard NFS mount, so a missing export leaves the pod
+  # in ContainerCreating rather than failing softly.
+  cache:
+    enabled: true
+    server: truenas.storage.hnatekmar.dev
+    path: /mnt/data/k8s/workspace/cache
+    mountPath: /cache/dots
 
 gpu:
   enabled: false

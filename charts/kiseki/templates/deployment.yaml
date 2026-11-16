@@ -56,7 +56,7 @@ spec:
 {{- fail (printf "extraContainers: %q needs an image" (.name | default "<unnamed>")) }}
 {{- end }}
 {{- end }}
-{{- $reservedVolumes := list "provision" "ssh-key" "docker-data" "data" }}
+{{- $reservedVolumes := list "provision" "ssh-key" "docker-data" "data" "dots-cache" }}
 {{- $volumeNames := list }}
 {{- range .Values.extraVolumes }}
 {{- if has .name $reservedVolumes }}
@@ -76,6 +76,15 @@ spec:
 {{- end }}
 {{- end }}
 {{- $dots := .Values.dots | default dict }}
+{{- $dotsCache := $dots.cache | default dict }}
+{{- if and $dots.enabled $dotsCache.enabled }}
+{{- if not $dotsCache.server }}
+{{- fail "dots.cache.server is required when dots.cache.enabled is true" }}
+{{- end }}
+{{- if not $dotsCache.path }}
+{{- fail "dots.cache.path is required when dots.cache.enabled is true" }}
+{{- end }}
+{{- end }}
 {{- $waitPorts := list }}
 {{- range .Values.extraContainers }}
 {{- range .ports }}
@@ -93,6 +102,10 @@ spec:
 {{- end }}
 {{- if $dots.enabled }}
 {{- $env = append $env (dict "name" "KISEKI_DOTS_REPO" "value" (required "dots.repo is required when dots.enabled is true" $dots.repo)) }}
+{{- $env = append $env (dict "name" "KISEKI_DOTS_TIMEOUT" "value" (toString ($dots.timeout | default 1200))) }}
+{{- end }}
+{{- if and $dots.enabled $dotsCache.enabled }}
+{{- $env = append $env (dict "name" "DOTS_CACHE_DIR" "value" $dotsCache.mountPath) }}
 {{- end }}
 {{- with .Values.extraInitContainers }}
       initContainers:
@@ -146,6 +159,13 @@ spec:
             - name: data
               mountPath: /root
 {{- end }}
+{{- if and $dots.enabled $dotsCache.enabled }}
+            # Shared download cache. Writable: fetch_cached publishes entries
+            # with mktemp+rename, so concurrent environments converge instead of
+            # racing. A read-only export only degrades it to per-pod downloads.
+            - name: dots-cache
+              mountPath: {{ $dotsCache.mountPath }}
+{{- end }}
 {{- with .Values.extraVolumeMounts }}
 {{- toYaml . | nindent 12 }}
 {{- end }}
@@ -183,6 +203,15 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "kiseki.fullname" . }}
+{{- end }}
+{{- if and $dots.enabled $dotsCache.enabled }}
+        # In-tree NFS, not the nfs-client StorageClass: that class archives the
+        # backing directory on PVC delete, which would take a cluster-wide shared
+        # cache out from under every other environment.
+        - name: dots-cache
+          nfs:
+            server: {{ $dotsCache.server }}
+            path: {{ $dotsCache.path }}
 {{- end }}
 {{- if $docker.enabled }}
         - name: docker-data

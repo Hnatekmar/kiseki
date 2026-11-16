@@ -8,12 +8,12 @@
 </div>
 
 [![Helm](https://img.shields.io/badge/Helm-chart-0F1689?logo=helm&logoColor=white)](charts/kiseki)
-[![Fedora](https://img.shields.io/badge/Fedora-42-51A2DA?logo=fedora&logoColor=white)](https://fedoraproject.org)
+[![Fedora](https://img.shields.io/badge/Fedora-45-51A2DA?logo=fedora&logoColor=white)](https://fedoraproject.org)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-kind-326CE5?logo=kubernetes&logoColor=white)](https://kind.sigs.k8s.io)
 
 > Dev environments that don't need divine intervention
 
-**Kiseki** creates temporary development pods on your Kubernetes cluster. Each pod runs Fedora 42 with SSH access and your dotfiles. When you finish work, you delete the environment completely.
+**Kiseki** creates temporary development pods on your Kubernetes cluster. Each pod runs Fedora 45 with SSH access and your dotfiles. When you finish work, you delete the environment completely.
 
 ---
 
@@ -77,7 +77,7 @@ of waiting silently, then runs the SSH check.
 ssh kiseki-my-dev-env
 ```
 
-You are now in a Fedora 42 pod as root with your dotfiles loaded.
+You are now in a Fedora 45 pod as root with your dotfiles loaded.
 
 ### Step 4: Clean up when done
 
@@ -119,7 +119,7 @@ kiseki create work --persistence --persistence-size 20Gi
 ## What You Get Inside
 
 Each environment includes:
-- **Fedora 42** base system
+- **Fedora 45** base system
 - **zsh** shell with your dotfiles from `/workdir`
 - **SSH server** for remote access
 - **Package manager** (`dnf`) for installing software
