@@ -55,9 +55,15 @@ done
 mkdir -p "$bindir"
 
 # fetch_verified <url> <destination> <sha256>
+#
+# Bounded on purpose. A blackholed or throttled upstream does not fail, it
+# dribbles, and a plain curl has no deadline at all: the job then sits in this
+# step until the lane's 30-minute timeout, with nothing in the log to say why.
+# The speed limit aborts a transfer that stays below 1KB/s for 60s and retries it.
 fetch_verified() {
   local url="$1" dest="$2" want="$3" got
-  curl -fsSL -o "$dest" "$url"
+  curl -fsSL --connect-timeout 15 --speed-limit 1024 --speed-time 60 \
+    --retry 3 --retry-delay 2 --retry-all-errors -o "$dest" "$url"
   got="$(sha256sum "$dest" | awk '{print $1}')"
   if [[ "$got" != "$want" ]]; then
     echo "checksum mismatch for $url" >&2
