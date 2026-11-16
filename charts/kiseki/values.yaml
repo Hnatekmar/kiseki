@@ -11,7 +11,7 @@ image:
   repository: forgejo.srv.hnatekmar.dev/hnatekmar/kiseki/base
   # Immutable tag -- bump it whenever images/base is rebuilt. pullPolicy is
   # IfNotPresent, so a reused tag leaves nodes on cached layers.
-  tag: "fedora45-5"
+  tag: "fedora45-6"
   pullPolicy: IfNotPresent
 
 resources:

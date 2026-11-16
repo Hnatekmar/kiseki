@@ -16,6 +16,14 @@
 ARG FEDORA_VERSION=45
 FROM fedora:${FEDORA_VERSION}
 
+# The build inputs, stamped into the image so the publishing workflow can tell
+# whether an existing tag was built from the current Dockerfile. Manifest and
+# layer digests cannot answer that: two builders produce different manifests for
+# identical content, and different BuildKit versions elide no-op layers
+# differently (seen: 4 layers here, 5 in CI, same Dockerfile).
+ARG SOURCE_DIGEST=unknown
+LABEL org.kiseki.source-digest="$SOURCE_DIGEST"
+
 # openssh-server/zsh/git/rsync: what up.sh would otherwise install.
 # docker-cli: only used with --docker, but it is small and removes a fetch from
 #   that path too.

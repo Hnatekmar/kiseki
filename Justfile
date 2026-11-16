@@ -24,7 +24,7 @@ fedora := "45"
 # Immutable tag: bump the revision here (and in charts/kiseki/values.yaml) on
 # every rebuild. pullPolicy is IfNotPresent, so a reused tag leaves nodes running
 # whatever layers they cached first.
-image_rev := "5"
+image_rev := "6"
 # just does not interpolate inside assignments: concatenate explicitly.
 image_tag := "fedora" + fedora + "-" + image_rev
 registry := "forgejo.srv.hnatekmar.dev/hnatekmar/kiseki/base"

@@ -64,6 +64,7 @@ jobs:
           if ! command -v docker >/dev/null 2>&1; then
             apt-get install -y -qq docker.io >/dev/null
           fi
+          apt-get install -y -qq jq >/dev/null
           docker version --format 'client={{.Client.Version}} server={{.Server.Version}}'
 
       - name: Resolve coordinates
@@ -76,6 +77,9 @@ jobs:
           repo="$(sed -n 's/^  repository: *\([^ ]*\)$/\1/p' charts/kiseki/values.yaml)"
           tag="$(sed -n 's/^  tag: *"\(.*\)"$/\1/p' charts/kiseki/values.yaml)"
           fedora="$(sed -n 's/^ARG FEDORA_VERSION=\([0-9][0-9]*\)$/\1/p' images/base/Dockerfile)"
+          # The Dockerfile itself is the build input that matters: a tag may only
+          # be reused if it was built from exactly this file.
+          source="$(sha256sum images/base/Dockerfile | cut -d' ' -f1)"
           for name in repo tag fedora; do
             if [ -z "${!name}" ]; then
               echo "could not read $name (repo='$repo' tag='$tag' fedora='$fedora')" >&2
@@ -91,6 +95,7 @@ jobs:
             echo "repo=$repo"
             echo "tag=$tag"
             echo "fedora=$fedora"
+            echo "source=$source"
             echo "host=$host"
             echo "path=$path"
             echo "sha_tag=sha-$short"
@@ -102,6 +107,7 @@ jobs:
           set -euo pipefail
           docker build \
             --build-arg "FEDORA_VERSION=${{ steps.coords.outputs.fedora }}" \
+            --build-arg "SOURCE_DIGEST=${{ steps.coords.outputs.source }}" \
             -t "${{ steps.coords.outputs.repo }}:${{ steps.coords.outputs.tag }}" \
             -t "${{ steps.coords.outputs.repo }}:${{ steps.coords.outputs.sha_tag }}" \
             images/base
@@ -114,6 +120,7 @@ jobs:
           repo='${{ steps.coords.outputs.repo }}'
           tag='${{ steps.coords.outputs.tag }}'
           sha_tag='${{ steps.coords.outputs.sha_tag }}'
+          source='${{ steps.coords.outputs.source }}'
           host='${{ steps.coords.outputs.host }}'
           path='${{ steps.coords.outputs.path }}'
 
@@ -123,18 +130,12 @@ jobs:
           fi
           printf '%s' "$REGISTRY_TOKEN" | docker login "$host" -u hnatekmar --password-stdin
 
-          # The sha tag is unique per commit, so it always publishes and gives the
-          # digest this build actually produced.
-          docker push "$repo:$sha_tag" | tee /tmp/push.log
-          # `docker push` prefixes the tag: "sha-abc1234: digest: sha256:... size: 1156".
-          digest="$(sed -n 's/.*digest: \(sha256:[0-9a-f]\{64\}\) size:.*/\1/p' /tmp/push.log | tail -1)"
-          if [ -z "$digest" ]; then
-            echo "could not read the pushed digest" >&2
-            exit 1
-          fi
+          # The sha tag is unique per commit, so it always publishes and keeps a
+          # traceable artifact per build.
+          docker push "$repo:$sha_tag"
 
           accept='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json'
-          code="$(curl -s -o /dev/null -D /tmp/manifest.headers -w '%{http_code}' \
+          code="$(curl -s -o /dev/null -w '%{http_code}' \
             -u "hnatekmar:$REGISTRY_TOKEN" -H "Accept: $accept" \
             "https://$host/v2/$path/manifests/$tag")"
           case "$code" in
@@ -143,11 +144,25 @@ jobs:
             docker push "$repo:$tag"
             ;;
           200)
-            remote="$(awk 'tolower($1) == "docker-content-digest:" {print $2}' /tmp/manifest.headers | tr -d '\r' | tail -1)"
-            if [ "$remote" = "$digest" ]; then
-              echo "$tag already points at this build ($digest)"
+            # Compare build inputs, not digests: two builders produce different
+            # manifests for identical content, and different BuildKit versions
+            # elide no-op layers differently. The Dockerfile hash stamped at build
+            # time is the only stable answer to "was this tag built from this file".
+            curl -s -o /tmp/manifest.json -u "hnatekmar:$REGISTRY_TOKEN" \
+              -H "Accept: $accept" "https://$host/v2/$path/manifests/$tag"
+            if jq -e '.manifests' /tmp/manifest.json >/dev/null 2>&1; then
+              amd="$(jq -r '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest' /tmp/manifest.json | head -1)"
+              curl -s -o /tmp/manifest.json -u "hnatekmar:$REGISTRY_TOKEN" \
+                -H "Accept: $accept" "https://$host/v2/$path/manifests/$amd"
+            fi
+            cfg="$(jq -r '.config.digest' /tmp/manifest.json)"
+            curl -sL -o /tmp/config.json -u "hnatekmar:$REGISTRY_TOKEN" \
+              "https://$host/v2/$path/blobs/$cfg"
+            remote_source="$(jq -r '.config.Labels["org.kiseki.source-digest"] // "unlabelled"' /tmp/config.json)"
+            if [ "$remote_source" = "$source" ]; then
+              echo "$tag was already built from this Dockerfile ($source)"
             else
-              echo "ERROR: $tag already exists as $remote, but this build is $digest." >&2
+              echo "ERROR: $tag was built from images/base@$remote_source, but it is now $source." >&2
               echo "       The tag is immutable and pullPolicy is IfNotPresent, so bump image_rev" >&2
               echo "       in the Justfile and image.tag in charts/kiseki/values.yaml." >&2
               exit 1
