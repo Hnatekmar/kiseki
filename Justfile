@@ -24,7 +24,7 @@ fedora := "45"
 # Immutable tag: bump the revision here (and in charts/kiseki/values.yaml) on
 # every rebuild. pullPolicy is IfNotPresent, so a reused tag leaves nodes running
 # whatever layers they cached first.
-image_rev := "3"
+image_rev := "4"
 image_tag := "fedora{{fedora}}-{{image_rev}}"
 registry := "forgejo.srv.hnatekmar.dev/hnatekmar/kiseki/base"
 base-image:
@@ -68,15 +68,20 @@ lint: syntax
     # without an export, and never rendered when dots are disabled (kind has no
     # storage network to mount from)
     helm template test charts/kiseki --set ssh.authorizedKey=test | grep -q 'name: DOTS_CACHE_DIR'
-    helm template test charts/kiseki --set ssh.authorizedKey=test | grep -q 'path: /mnt/data/k8s/workspace/cache'
+    helm template test charts/kiseki --set ssh.authorizedKey=test | grep -q 'path: "/mnt/data/k8s/workspace/cache"'
     ! helm template test charts/kiseki --set ssh.authorizedKey=test --set dots.cache.enabled=false | grep -q 'name: DOTS_CACHE_DIR'
     ! helm template test charts/kiseki --set ssh.authorizedKey=test --set dots.enabled=false | grep -q 'name: dots-cache'
     ! helm template test charts/kiseki --set ssh.authorizedKey=test --set dots.cache.server= >/dev/null 2>&1
+    ! helm template test charts/kiseki --set ssh.authorizedKey=test --set dots.cache.path= >/dev/null 2>&1
+    ! helm template test charts/kiseki --set ssh.authorizedKey=test --set dots.cache.mountPath= >/dev/null 2>&1
     # bootstrap wall-clock cap is exported
     helm template test charts/kiseki --set ssh.authorizedKey=test | grep -q 'name: KISEKI_DOTS_TIMEOUT'
     helm template test charts/kiseki --set ssh.authorizedKey=test --set dots.timeout=120 | grep -q 'value: "120"'
+    helm template test charts/kiseki --set ssh.authorizedKey=test --set dots.timeout=0 | grep -q 'value: "0"'
+    ! helm template test charts/kiseki --set ssh.authorizedKey=test --set dots.timeout=abc >/dev/null 2>&1
+    ! helm template test charts/kiseki --set ssh.authorizedKey=test --set dots.timeout=-5 >/dev/null 2>&1
     # the default image carries the prerequisites
-    helm template test charts/kiseki --set ssh.authorizedKey=test | grep -q 'image: "forgejo.srv.hnatekmar.dev/hnatekmar/kiseki/base:fedora45-3"'
+    helm template test charts/kiseki --set ssh.authorizedKey=test | grep -q 'image: "forgejo.srv.hnatekmar.dev/hnatekmar/kiseki/base:fedora45-4"'
     ! helm template test charts/kiseki --set ssh.authorizedKey=test --set-json 'extraVolumes=[{"name":"dots-cache","emptyDir":{}}]' >/dev/null 2>&1
     # scheduling: the control-plane toleration is on by default, and removable
     helm template test charts/kiseki --set ssh.authorizedKey=test | grep -q 'node-role.kubernetes.io/control-plane'

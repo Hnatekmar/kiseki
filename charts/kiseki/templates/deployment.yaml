@@ -77,12 +77,25 @@ spec:
 {{- end }}
 {{- $dots := .Values.dots | default dict }}
 {{- $dotsCache := $dots.cache | default dict }}
+{{- $dotsTimeout := 1200 }}
+{{- if hasKey $dots "timeout" }}
+{{- $dotsTimeout = int $dots.timeout }}
+{{- if ne (toString $dotsTimeout) (toString $dots.timeout) }}
+{{- fail "dots.timeout must be a whole number of seconds" }}
+{{- end }}
+{{- end }}
+{{- if lt $dotsTimeout 0 }}
+{{- fail "dots.timeout must not be negative" }}
+{{- end }}
 {{- if and $dots.enabled $dotsCache.enabled }}
 {{- if not $dotsCache.server }}
 {{- fail "dots.cache.server is required when dots.cache.enabled is true" }}
 {{- end }}
 {{- if not $dotsCache.path }}
 {{- fail "dots.cache.path is required when dots.cache.enabled is true" }}
+{{- end }}
+{{- if not $dotsCache.mountPath }}
+{{- fail "dots.cache.mountPath is required when dots.cache.enabled is true" }}
 {{- end }}
 {{- end }}
 {{- $waitPorts := list }}
@@ -102,7 +115,7 @@ spec:
 {{- end }}
 {{- if $dots.enabled }}
 {{- $env = append $env (dict "name" "KISEKI_DOTS_REPO" "value" (required "dots.repo is required when dots.enabled is true" $dots.repo)) }}
-{{- $env = append $env (dict "name" "KISEKI_DOTS_TIMEOUT" "value" (toString ($dots.timeout | default 1200))) }}
+{{- $env = append $env (dict "name" "KISEKI_DOTS_TIMEOUT" "value" (toString $dotsTimeout)) }}
 {{- end }}
 {{- if and $dots.enabled $dotsCache.enabled }}
 {{- $env = append $env (dict "name" "DOTS_CACHE_DIR" "value" $dotsCache.mountPath) }}
@@ -164,7 +177,7 @@ spec:
             # with mktemp+rename, so concurrent environments converge instead of
             # racing. A read-only export only degrades it to per-pod downloads.
             - name: dots-cache
-              mountPath: {{ $dotsCache.mountPath }}
+              mountPath: {{ $dotsCache.mountPath | quote }}
 {{- end }}
 {{- with .Values.extraVolumeMounts }}
 {{- toYaml . | nindent 12 }}
@@ -210,8 +223,8 @@ spec:
         # cache out from under every other environment.
         - name: dots-cache
           nfs:
-            server: {{ $dotsCache.server }}
-            path: {{ $dotsCache.path }}
+            server: {{ $dotsCache.server | quote }}
+            path: {{ $dotsCache.path | quote }}
 {{- end }}
 {{- if $docker.enabled }}
         - name: docker-data

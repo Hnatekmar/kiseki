@@ -11,7 +11,7 @@ image:
   repository: forgejo.srv.hnatekmar.dev/hnatekmar/kiseki/base
   # Immutable tag -- bump it whenever images/base is rebuilt. pullPolicy is
   # IfNotPresent, so a reused tag leaves nodes on cached layers.
-  tag: "fedora45-3"
+  tag: "fedora45-4"
   pullPolicy: IfNotPresent
 
 resources:
@@ -51,7 +51,9 @@ dots:
   # assets; with it, only the first environment after a version bump touches the
   # network. Requires the NFS export to exist, and is ignored when dots.enabled
   # is false — the mount is a hard NFS mount, so a missing export leaves the pod
-  # in ContainerCreating rather than failing softly.
+  # in ContainerCreating rather than failing softly. Defaulting it on is
+  # deliberate: this chart is deployed only to the homelab dev cluster, where the
+  # export always exists. Anywhere else, set enabled: false.
   cache:
     enabled: true
     server: truenas.storage.hnatekmar.dev

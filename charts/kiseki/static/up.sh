@@ -119,14 +119,27 @@ if [ -n "${KISEKI_DOTS_REPO:-}" ]; then
     # a second run; what it buys is a reachable environment, because sshd only
     # starts after this returns. A hard failure keeps the old behaviour (abort
     # and let the container restart) so a broken base image still fails loudly.
+    #
+    # 0 means "no cap" (coreutils treats it that way), so only non-numeric values
+    # are corrected: `timeout abc` exits 125 and would restart-loop the pod,
+    # which is the failure this block exists to remove.
     timeout_s="${KISEKI_DOTS_TIMEOUT:-1200}"
+    if ! [[ "$timeout_s" =~ ^[0-9]+$ ]]; then
+      echo "WARN: KISEKI_DOTS_TIMEOUT='$timeout_s' is not a number, using 1200" >&2
+      timeout_s=1200
+    fi
     bootstrap_rc=0
     timeout -k 30 "$timeout_s" bash bootstrap.sh || bootstrap_rc=$?
-    if [ "$bootstrap_rc" = 124 ] || [ "$bootstrap_rc" = 137 ]; then
+    if [ "$bootstrap_rc" = 124 ]; then
       echo "WARN: dotfiles bootstrap exceeded ${timeout_s}s and was killed; starting sshd anyway." >&2
-      echo "WARN: re-run 'dots-bootstrap.sh' inside the environment to resume (it is idempotent)." >&2
+      echo "WARN: re-run /workdir/dots/bootstrap.sh inside the environment to resume (it is idempotent)." >&2
       # A killed bootstrap can leave children holding the network. They are not
       # waited on; the environment is usable and the next run re-checks versions.
+    elif [ "$bootstrap_rc" = 137 ]; then
+      # 128+SIGKILL: either `timeout -k` after the cap, or the OOM killer. Both
+      # leave an environment worth logging into, so start sshd but say which.
+      echo "WARN: dotfiles bootstrap was SIGKILLed (timeout -k or OOM), not a clean timeout; starting sshd anyway." >&2
+      echo "WARN: re-run /workdir/dots/bootstrap.sh inside the environment to resume (it is idempotent)." >&2
     elif [ "$bootstrap_rc" != 0 ]; then
       echo "ERROR: dotfiles bootstrap exited $bootstrap_rc" >&2
       exit "$bootstrap_rc"
