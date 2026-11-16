@@ -113,7 +113,15 @@ jobs:
           ssh-keygen -q -t ed25519 -N '' -f "$HOME/.ssh/id_ed25519"
           # No dotfiles bootstrap: it pulls a rust toolchain and does not fit in
           # the recipe's 1Gi, and this job tests the plumbing, not someone's zsh.
-          KISEKI_TEST_ARGS='--set dots.enabled=false' just test
+          #
+          # The stock image, not the chart default: the base image lives in the
+          # homelab registry, whose name resolves through public DNS to a stale
+          # address outside the lab (172.16.100.15, while the internal resolver
+          # says 172.16.40.34). The kind node here uses 1.1.1.1, so it cannot
+          # reach the registry at all and the pod sits in ImagePullBackOff. The
+          # stock fedora tag is the documented fallback; pulling the real default
+          # is what the image job's build proves.
+          KISEKI_TEST_ARGS='--set dots.enabled=false --set image.repository=fedora --set image.tag=45' just test
 
       - name: Diagnostics
         if: failure()
