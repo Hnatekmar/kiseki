@@ -126,7 +126,8 @@ jobs:
           # The sha tag is unique per commit, so it always publishes and gives the
           # digest this build actually produced.
           docker push "$repo:$sha_tag" | tee /tmp/push.log
-          digest="$(sed -n 's/^digest: \(sha256:[0-9a-f]\{64\}\) size:.*/\1/p' /tmp/push.log | tail -1)"
+          # `docker push` prefixes the tag: "sha-abc1234: digest: sha256:... size: 1156".
+          digest="$(sed -n 's/.*digest: \(sha256:[0-9a-f]\{64\}\) size:.*/\1/p' /tmp/push.log | tail -1)"
           if [ -z "$digest" ]; then
             echo "could not read the pushed digest" >&2
             exit 1
