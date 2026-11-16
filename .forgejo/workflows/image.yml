@@ -1,0 +1,159 @@
+# Build the kiseki base image and publish it to the Forgejo registry.
+#
+# The chart deploys `<repository>:<tag>` with `pullPolicy: IfNotPresent`, so a tag
+# has to identify exactly one build: reusing one leaves nodes on whatever layers
+# they cached. This workflow enforces that instead of trusting people to remember.
+#
+#   - Coordinates come from `charts/kiseki/values.yaml`, not from this file, so CI
+#     builds the image the chart actually deploys. `just lint` asserts the Justfile
+#     agrees with those values.
+#   - Every build also gets a `sha-<commit>` tag, which is what makes rollback and
+#     traceability possible without a moving pointer.
+#   - If the chart tag already exists in the registry with different content, the
+#     job fails and asks for an `image_rev` bump rather than overwriting it.
+#
+# Same-repo pull requests publish too: the tag is immutable, so pushing early only
+# removes the window between merge and the first main run where a new environment
+# would reference an image that does not exist yet. Forked PRs are excluded by the
+# guard, which is the only case where publishing would be untrusted.
+name: image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'images/base/**'
+      - 'charts/kiseki/values.yaml'
+      - 'Justfile'
+      - '.forgejo/workflows/image.yml'
+  pull_request:
+    paths:
+      - 'images/base/**'
+      - 'charts/kiseki/values.yaml'
+      - 'Justfile'
+      - '.forgejo/workflows/image.yml'
+  workflow_dispatch:
+
+# Forgejo 15 ignores this, but it documents the scope the workflow expects.
+permissions:
+  contents: read
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: [self-hosted, dind]
+    timeout-minutes: 20
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    env:
+      DOCKER_HOST: tcp://host.docker.internal:2375
+      DOCKER_BUILDKIT: '1'
+      REGISTRY: forgejo.srv.hnatekmar.dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install docker CLI
+        run: |
+          set -euo pipefail
+          # The job image ships no docker CLI; the daemon is a sibling of the job
+          # container, which is why DOCKER_HOST is the host gateway. No buildx on
+          # this lane, so the build is single-platform by design.
+          apt-get update -qq
+          if ! command -v docker >/dev/null 2>&1; then
+            apt-get install -y -qq docker.io >/dev/null
+          fi
+          docker version --format 'client={{.Client.Version}} server={{.Server.Version}}'
+
+      - name: Resolve coordinates
+        id: coords
+        run: |
+          set -euo pipefail
+          # values.yaml is the source of truth for what the chart deploys. The sed
+          # patterns are anchored to the top-level `image:` block (two spaces), so
+          # the nested `docker.image` keys cannot match.
+          repo="$(sed -n 's/^  repository: *\([^ ]*\)$/\1/p' charts/kiseki/values.yaml)"
+          tag="$(sed -n 's/^  tag: *"\(.*\)"$/\1/p' charts/kiseki/values.yaml)"
+          fedora="$(sed -n 's/^ARG FEDORA_VERSION=\([0-9][0-9]*\)$/\1/p' images/base/Dockerfile)"
+          for name in repo tag fedora; do
+            if [ -z "${!name}" ]; then
+              echo "could not read $name (repo='$repo' tag='$tag' fedora='$fedora')" >&2
+              exit 1
+            fi
+          done
+          # `repo` carries the registry host; split it so the same value can build
+          # an image reference and a /v2/ API path.
+          host="${repo%%/*}"
+          path="${repo#*/}"
+          short="$(git rev-parse --short=9 HEAD)"
+          {
+            echo "repo=$repo"
+            echo "tag=$tag"
+            echo "fedora=$fedora"
+            echo "host=$host"
+            echo "path=$path"
+            echo "sha_tag=sha-$short"
+          } >>"$GITHUB_OUTPUT"
+          echo "building $repo:$tag (fedora $fedora) and :sha-$short"
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          docker build \
+            --build-arg "FEDORA_VERSION=${{ steps.coords.outputs.fedora }}" \
+            -t "${{ steps.coords.outputs.repo }}:${{ steps.coords.outputs.tag }}" \
+            -t "${{ steps.coords.outputs.repo }}:${{ steps.coords.outputs.sha_tag }}" \
+            images/base
+
+      - name: Publish
+        env:
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          repo='${{ steps.coords.outputs.repo }}'
+          tag='${{ steps.coords.outputs.tag }}'
+          sha_tag='${{ steps.coords.outputs.sha_tag }}'
+          host='${{ steps.coords.outputs.host }}'
+          path='${{ steps.coords.outputs.path }}'
+
+          if [ -z "${REGISTRY_TOKEN:-}" ]; then
+            echo "REGISTRY_TOKEN is not set: add a repo secret with package write scope" >&2
+            exit 1
+          fi
+          printf '%s' "$REGISTRY_TOKEN" | docker login "$host" -u hnatekmar --password-stdin
+
+          # The sha tag is unique per commit, so it always publishes and gives the
+          # digest this build actually produced.
+          docker push "$repo:$sha_tag" | tee /tmp/push.log
+          digest="$(sed -n 's/^digest: \(sha256:[0-9a-f]\{64\}\) size:.*/\1/p' /tmp/push.log | tail -1)"
+          if [ -z "$digest" ]; then
+            echo "could not read the pushed digest" >&2
+            exit 1
+          fi
+
+          accept='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json'
+          code="$(curl -s -o /dev/null -D /tmp/manifest.headers -w '%{http_code}' \
+            -u "hnatekmar:$REGISTRY_TOKEN" -H "Accept: $accept" \
+            "https://$host/v2/$path/manifests/$tag")"
+          case "$code" in
+          404)
+            echo "$tag does not exist yet, publishing this build"
+            docker push "$repo:$tag"
+            ;;
+          200)
+            remote="$(awk 'tolower($1) == "docker-content-digest:" {print $2}' /tmp/manifest.headers | tr -d '\r' | tail -1)"
+            if [ "$remote" = "$digest" ]; then
+              echo "$tag already points at this build ($digest)"
+            else
+              echo "ERROR: $tag already exists as $remote, but this build is $digest." >&2
+              echo "       The tag is immutable and pullPolicy is IfNotPresent, so bump image_rev" >&2
+              echo "       in the Justfile and image.tag in charts/kiseki/values.yaml." >&2
+              exit 1
+            fi
+            ;;
+          *)
+            echo "unexpected registry response for $tag: HTTP $code" >&2
+            exit 1
+            ;;
+          esac
