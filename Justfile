@@ -17,14 +17,14 @@ build:
 
 # Build and push the kiseki base image. Bakes the provisioning prerequisites
 # (sshd, zsh, git, curl, tar, findutils, python3, gcc, make, socat, docker-cli,
-# procps-ng, hostname, iproute, which, lsof)
+# procps-ng, hostname, iproute, which, lsof, diffutils, patch)
 # into the image so a pod start does not fetch them from Fedora mirrors.
 # Packages under hnatekmar/kiseki are anonymously pullable; no pull secret.
 fedora := "45"
 # Immutable tag: bump the revision here (and in charts/kiseki/values.yaml) on
 # every rebuild. pullPolicy is IfNotPresent, so a reused tag leaves nodes running
 # whatever layers they cached first.
-image_rev := "2"
+image_rev := "3"
 image_tag := "fedora{{fedora}}-{{image_rev}}"
 registry := "forgejo.srv.hnatekmar.dev/hnatekmar/kiseki/base"
 base-image:
@@ -76,7 +76,7 @@ lint: syntax
     helm template test charts/kiseki --set ssh.authorizedKey=test | grep -q 'name: KISEKI_DOTS_TIMEOUT'
     helm template test charts/kiseki --set ssh.authorizedKey=test --set dots.timeout=120 | grep -q 'value: "120"'
     # the default image carries the prerequisites
-    helm template test charts/kiseki --set ssh.authorizedKey=test | grep -q 'image: "forgejo.srv.hnatekmar.dev/hnatekmar/kiseki/base:fedora45-2"'
+    helm template test charts/kiseki --set ssh.authorizedKey=test | grep -q 'image: "forgejo.srv.hnatekmar.dev/hnatekmar/kiseki/base:fedora45-3"'
     ! helm template test charts/kiseki --set ssh.authorizedKey=test --set-json 'extraVolumes=[{"name":"dots-cache","emptyDir":{}}]' >/dev/null 2>&1
     # scheduling: the control-plane toleration is on by default, and removable
     helm template test charts/kiseki --set ssh.authorizedKey=test | grep -q 'node-role.kubernetes.io/control-plane'

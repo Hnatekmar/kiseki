@@ -1,7 +1,7 @@
 image:
   # Prebuilt base with the provisioning prerequisites already installed
   # (openssh-server, zsh, git, rsync, curl, tar, findutils, python3, gcc, make,
-  # socat, docker-cli, procps-ng, hostname, iproute, which, lsof). Packages under
+  # socat, docker-cli, procps-ng, hostname, iproute, which, lsof, diffutils, patch). Packages under
   # hnatekmar/kiseki are anonymously
   # pullable, so environments need no imagePullSecret.
   #
@@ -11,7 +11,7 @@ image:
   repository: forgejo.srv.hnatekmar.dev/hnatekmar/kiseki/base
   # Immutable tag -- bump it whenever images/base is rebuilt. pullPolicy is
   # IfNotPresent, so a reused tag leaves nodes on cached layers.
-  tag: "fedora45-2"
+  tag: "fedora45-3"
   pullPolicy: IfNotPresent
 
 resources:

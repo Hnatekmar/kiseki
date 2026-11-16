@@ -8,7 +8,7 @@ have no flag live.
 
 | Key | Default | Notes |
 |-----|---------|-------|
-| `image.repository` / `image.tag` | `forgejo.srv.hnatekmar.dev/hnatekmar/kiseki/base` / `fedora45-2` | Prerequisites preinstalled (sshd, zsh, git, curl, tar, findutils, python3, gcc, make, socat, docker-cli, procps-ng, hostname, iproute, which, lsof) and anonymously pullable; `--set image.repository=fedora --set image.tag=45` works too, at the cost of mirror fetches on start. Build with `just base-image` |
+| `image.repository` / `image.tag` | `forgejo.srv.hnatekmar.dev/hnatekmar/kiseki/base` / `fedora45-3` | Prerequisites preinstalled (sshd, zsh, git, curl, tar, findutils, python3, gcc, make, socat, docker-cli, procps-ng, hostname, iproute, which, lsof, diffutils, patch) and anonymously pullable; `--set image.repository=fedora --set image.tag=45` works too, at the cost of mirror fetches on start. Build with `just base-image` |
 | `resources.requests.{cpu,memory}` | `1` / `1Gi` | |
 | `resources.limits.{cpu,memory}` | `4` / `8Gi` | |
 | `gpu.enabled` | `false` | |

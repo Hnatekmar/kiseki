@@ -20,11 +20,13 @@ FROM fedora:${FEDORA_VERSION}
 # docker-cli: only used with --docker, but it is small and removes a fetch from
 #   that path too.
 # curl/tar/findutils/python3/gcc/make/socat: dots' bootstrap prerequisites.
+# diffutils/patch/procps-ng/hostname/iproute/which/lsof: what a development
+#   shell is expected to have. `just lint` in kiseki needs `diff`.
 # install_weak_deps=0 keeps the image from pulling recommendation packages.
 RUN dnf5 install -y --setopt=install_weak_deps=0 \
         openssh-server zsh git rsync docker-cli \
         curl tar findutils python3 gcc make socat \
-        procps-ng hostname iproute which lsof \
+        procps-ng hostname iproute which lsof diffutils patch \
  && dnf5 clean packages \
  && rm -rf /var/cache/dnf /var/cache/libdnf5 /var/cache/dnf5
 
