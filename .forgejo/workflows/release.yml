@@ -24,7 +24,9 @@ concurrency:
 
 jobs:
   goreleaser:
-    runs-on: [self-hosted, mgmt]
+    # k8s, not mgmt: mgmt is the terraform lane, and a release build has no
+    # business queueing in front of (or behind) an infrastructure apply.
+    runs-on: [self-hosted, k8s]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4

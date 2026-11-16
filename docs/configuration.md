@@ -8,7 +8,7 @@ have no flag live.
 
 | Key | Default | Notes |
 |-----|---------|-------|
-| `image.repository` / `image.tag` | `fedora` / `42` | |
+| `image.repository` / `image.tag` | `forgejo.srv.hnatekmar.dev/hnatekmar/kiseki/base` / `fedora45-6` | Prerequisites preinstalled (sshd, zsh, git, curl, tar, findutils, python3, gcc, make, socat, docker-cli, procps-ng, hostname, iproute, which, lsof, diffutils, patch) and anonymously pullable; `--set image.repository=fedora --set image.tag=45` works too, at the cost of mirror fetches on start. Build with `just base-image` |
 | `resources.requests.{cpu,memory}` | `1` / `1Gi` | |
 | `resources.limits.{cpu,memory}` | `4` / `8Gi` | |
 | `gpu.enabled` | `false` | |
@@ -17,6 +17,11 @@ have no flag live.
 | `ssh.authorizedKey` | `""` | Use `--set-file` |
 | `dots.enabled` | `true` | Clones `dots.repo` and runs its installer at start; `false` leaves a plain Fedora shell |
 | `dots.repo` | `https://github.com/Hnatekmar/dots.git` | |
+| `dots.timeout` | `1200` | Wall-clock cap on the bootstrap in seconds; on timeout sshd starts anyway and the bootstrap can be re-run inside the environment. `0` disables the cap |
+| `dots.cache.enabled` | `true` | Mount an NFS export and export it as `DOTS_CACHE_DIR`. Requires `dots.enabled`; a missing export leaves the pod in `ContainerCreating` |
+| `dots.cache.server` | `truenas.storage.hnatekmar.dev` | NFS server |
+| `dots.cache.path` | `/mnt/data/k8s/workspace/cache` | Export path |
+| `dots.cache.mountPath` | `/cache/dots` | Mount point inside the container |
 | `tolerations` | control-plane taint | A dev environment may run on a single-node cluster; `--set tolerations=null` drops it |
 | `fullnameOverride` | `""` | Optional resource-name override; defaults to the release name |
 | `storage.enabled` | `false` | |

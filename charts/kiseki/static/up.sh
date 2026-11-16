@@ -10,9 +10,17 @@ echo "=== provisioning kiseki environment ==="
 chown root:root /root
 chmod 755 /root
 
-# docker-cli is only needed when the chart wired up the dind sidecar.
+if [ -f /etc/kiseki-image ]; then
+  echo "=== image: $(cat /etc/kiseki-image)"
+fi
+
+# docker-cli is only needed when the chart wired up the dind sidecar. git is
+# needed to clone the dots checkout; on the kiseki base image everything is
+# already present and this whole block is skipped, which keeps pod start off the
+# Fedora mirrors.
 need_install=0
 command -v sshd >/dev/null 2>&1 || need_install=1
+command -v git >/dev/null 2>&1 || need_install=1
 if [ -n "${DOCKER_HOST:-}" ] && ! command -v docker >/dev/null 2>&1; then
   need_install=1
 fi
@@ -83,6 +91,15 @@ mkdir -p /workdir
 # on a small environment. Without it the pod is a plain Fedora shell, which is
 # what the smoke test needs.
 if [ -n "${KISEKI_DOTS_REPO:-}" ]; then
+  # Bound every git fetch in this shell and below. A blackholed GitHub edge does
+  # not fail: it dribbles (measured at ~1MB/min on hermes-agent) and the pod then
+  # never reaches sshd. With these, git aborts after 30s below 1KB/s and the
+  # failure is visible in the log instead. GIT_TERMINAL_PROMPT=0 stops a clone
+  # that wants credentials from waiting on a prompt no one can answer.
+  export GIT_TERMINAL_PROMPT=0
+  export GIT_HTTP_LOW_SPEED_LIMIT="${GIT_HTTP_LOW_SPEED_LIMIT:-1000}"
+  export GIT_HTTP_LOW_SPEED_TIME="${GIT_HTTP_LOW_SPEED_TIME:-30}"
+
   # Re-running on a restarted pod with persistent storage must not fail on an
   # existing clone, so update in place instead of cloning unconditionally.
   if [ -d /workdir/dots/.git ]; then
@@ -95,7 +112,38 @@ if [ -n "${KISEKI_DOTS_REPO:-}" ]; then
   # dots.repo is configurable, so the checkout may have no installer. Dying here
   # would restart the container forever and leave no way to log in and look.
   if [ -f bootstrap.sh ]; then
-    bash bootstrap.sh
+    if [ -n "${DOTS_CACHE_DIR:-}" ]; then
+      echo "=== dots download cache: $DOTS_CACHE_DIR"
+    fi
+    # Wall-clock cap. The bootstrap is idempotent, so a timeout costs nothing but
+    # a second run; what it buys is a reachable environment, because sshd only
+    # starts after this returns. A hard failure keeps the old behaviour (abort
+    # and let the container restart) so a broken base image still fails loudly.
+    #
+    # 0 means "no cap" (coreutils treats it that way), so only non-numeric values
+    # are corrected: `timeout abc` exits 125 and would restart-loop the pod,
+    # which is the failure this block exists to remove.
+    timeout_s="${KISEKI_DOTS_TIMEOUT:-1200}"
+    if ! [[ "$timeout_s" =~ ^[0-9]+$ ]]; then
+      echo "WARN: KISEKI_DOTS_TIMEOUT='$timeout_s' is not a number, using 1200" >&2
+      timeout_s=1200
+    fi
+    bootstrap_rc=0
+    timeout -k 30 "$timeout_s" bash bootstrap.sh || bootstrap_rc=$?
+    if [ "$bootstrap_rc" = 124 ]; then
+      echo "WARN: dotfiles bootstrap exceeded ${timeout_s}s and was killed; starting sshd anyway." >&2
+      echo "WARN: re-run /workdir/dots/bootstrap.sh inside the environment to resume (it is idempotent)." >&2
+      # A killed bootstrap can leave children holding the network. They are not
+      # waited on; the environment is usable and the next run re-checks versions.
+    elif [ "$bootstrap_rc" = 137 ]; then
+      # 128+SIGKILL: either `timeout -k` after the cap, or the OOM killer. Both
+      # leave an environment worth logging into, so start sshd but say which.
+      echo "WARN: dotfiles bootstrap was SIGKILLed (timeout -k or OOM), not a clean timeout; starting sshd anyway." >&2
+      echo "WARN: re-run /workdir/dots/bootstrap.sh inside the environment to resume (it is idempotent)." >&2
+    elif [ "$bootstrap_rc" != 0 ]; then
+      echo "ERROR: dotfiles bootstrap exited $bootstrap_rc" >&2
+      exit "$bootstrap_rc"
+    fi
   else
     echo "WARN: $KISEKI_DOTS_REPO has no bootstrap.sh, skipping dotfiles install" >&2
   fi
